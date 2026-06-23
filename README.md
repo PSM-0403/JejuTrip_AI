@@ -134,7 +134,7 @@ streamlit run app.py
 | `place_url` | 카카오맵 URL |
 | `rating` | 평점 |
 | `total_cnt` | 리뷰 수 + 블로그 수 합산 |
-| `reviews_text` | 리뷰 본문 (`|` 응가) |
+| `reviews_text` | 리뷰 본문 (`|` 구분) |
 
 ### 데이터 재크롤링
 
