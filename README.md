@@ -11,7 +11,7 @@
 | 🏨 숙소 검색 | 카카오 API 실시간 검색 — 숙소명·도로명 주소 모두 지원 |
 | 🚀 코스 자동 생성 | 일차별 6개 슬롯(아침 카페→오전 관광→점심→오후 관광→오후 카페→저녁) 자동 배치 |
 | 🤖 AI 맞춤 조건 | 슬롯별 취향 입력 → 키워드 추출 → CSV 데이터 매칭 |
-| 🧠 Chroma 리뷰 검색 | 리뷰 임베딩 유사도로 취향에 맞는 장소 부스트 (선택 기능) |
+| 🧠 Chroma 리뷰 검색 | 리뷰 임베딩 유사도로 취향에 맞는 장소 부스트 |
 | 🗺️ 전체 지도 | Folium으로 일차별 색상 구분 마커 + 동선 표시 |
 | 💬 AI 챗봇 | 코스 장소 즉시 교체 / 후보 리스트 제시 / 제주 여행 Q&A |
 | 📊 코스 분석 | 추천 근거·평점·리뷰 요약 탭 |
@@ -34,19 +34,20 @@ jeju/
 ├── ui_components.py         # Streamlit UI 컴포넌트
 ├── recrawl.py               # CSV 데이터 재크롤링 스크립트
 ├── jeju_crawling_100.csv    # 장소 데이터 (팀 직접 수집)
-├── chroma_jeju_reviews/     # Chroma 벡터 DB (build_chroma.py 실행 후 생성)
-├── .env                     # API 키 환경변수 (직접 생성)
+├── chroma_jeju_reviews/     # Chroma 벡터 DB (빌드 완료본 포함)
+├── .env                     # API 키 환경변수 (직접 생성, Git 제외)
 ├── .env.example             # 환경변수 템플릿
+├── .python-version          # Python 3.11 지정 (Streamlit Cloud용)
 └── requirements.txt
 ```
 
 ---
 
-## 설치 및 실행
+## 로컬 실행
 
 ### 요구사항
 
-- Python 3.10 이상
+- Python 3.11 이상
 - 카카오 REST API 키 (필수)
 - OpenAI API 키 (선택 — 없어도 기본 CSV 추천 동작)
 
@@ -77,16 +78,14 @@ OPENAI_MODEL=gpt-4o-mini             # 기본값
 
 > `.env` 설정 없이도 앱 실행 후 사이드바에서 직접 키를 입력할 수 있습니다.
 
-### 3. (선택) Chroma 리뷰 DB 구축
+### 3. (선택) Chroma 리뷰 DB 재구축
 
-리뷰 임베딩 유사도 검색 기능을 활성화하려면 최초 1회 실행합니다.  
-OpenAI API 키와 `jeju_crawling_100.csv`가 필요합니다.
+`chroma_jeju_reviews/`가 이미 레포에 포함되어 있으므로 일반적으로 불필요합니다.  
+CSV 데이터를 새로 수집한 경우에만 재실행합니다.
 
 ```bash
 python build_chroma.py
 ```
-
-실행 후 `chroma_jeju_reviews/` 디렉터리가 생성됩니다.
 
 ### 4. 앱 실행
 
@@ -95,6 +94,34 @@ streamlit run app.py
 ```
 
 브라우저에서 `http://localhost:8501` 접속
+
+---
+
+## Streamlit Cloud 배포
+
+### 배포 방법
+
+1. GitHub에 코드 push (Chroma DB 포함)
+2. [share.streamlit.io](https://share.streamlit.io) 접속 → GitHub 로그인
+3. **Create app** → **Deploy a public app from GitHub**
+4. Repository: `PSM-0403/JejuTrip_AI` / Branch: `main` / Main file: `app.py`
+5. **Advanced settings** → Secrets에 API 키 입력:
+
+```toml
+KAKAO_API_KEY = "your_kakao_rest_api_key"
+OPENAI_API_KEY = "your_openai_api_key"
+OPENAI_MODEL = "gpt-4o-mini"
+```
+
+6. **Deploy** 클릭
+
+### 클라우드 동작 방식
+
+| 항목 | 내용 |
+|------|------|
+| Chroma DB | `chroma_jeju_reviews/`가 레포에 포함되어 있어 클라우드에서도 즉시 사용 가능 |
+| API 키 | Streamlit Secrets에 등록하거나 앱 사이드바에서 직접 입력 |
+| Python | `.python-version` 파일로 3.11 고정 |
 
 ---
 
@@ -190,7 +217,7 @@ python recrawl.py
     ├─ 취향 조건 입력
     │      │
     │      ├─ CSV 키워드 매칭 ── jeju_crawling_100.csv
-    │      └─ Chroma 유사도 ──── 리뷰 임베딩 DB (선택)
+    │      └─ Chroma 유사도 ──── 리뷰 임베딩 DB
     │
     ├─ 추천 엔진 (recommendation_engine.py)
     │      └─ 점수 계산 → 슬롯 배치 → 일정 생성
