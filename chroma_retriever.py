@@ -8,16 +8,20 @@
 import os
 from typing import Dict, List
 
-from langchain_openai import OpenAIEmbeddings
-from langchain_chroma import Chroma
+try:
+    from langchain_openai import OpenAIEmbeddings
+    from langchain_chroma import Chroma
+    _CHROMA_AVAILABLE = True
+except Exception:
+    _CHROMA_AVAILABLE = False
 
 CHROMA_DIR = "./chroma_jeju_reviews"
 COLLECTION  = "jeju_reviews"
 
 
 def is_chroma_ready() -> bool:
-    """Chroma DB 디렉터리가 존재하는지 확인"""
-    return os.path.isdir(CHROMA_DIR)
+    """Chroma DB 디렉터리가 존재하고 패키지가 사용 가능한지 확인"""
+    return _CHROMA_AVAILABLE and os.path.isdir(CHROMA_DIR)
 
 
 def get_similar_places(
