@@ -2,6 +2,8 @@
 
 제주도 여행 맞춤 추천 시스템. 팀이 직접 수집한 CSV 데이터와 카카오 API, OpenAI GPT를 결합해 일차별 여행 코스를 자동 생성하고 AI 챗봇으로 실시간 수정합니다.
 
+🔗 **배포 링크**: [jejutripai.streamlit.app](https://jejutripai.streamlit.app/)
+
 ---
 
 ## 주요 기능
