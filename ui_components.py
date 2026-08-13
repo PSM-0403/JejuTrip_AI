@@ -112,6 +112,17 @@ def render_day_course(day_info: Dict, ulat: float, ulng: float,
                       kakao: Optional[KakaoService] = None,
                       stay_name: str = "숙소"):
     """1개 일차의 전체 슬롯 순서대로 렌더링"""
+    slots = day_info.get("slots", [])
+    if slots:
+        total_dist = 0.0
+        p_lat, p_lng = ulat, ulng
+        for s in slots:
+            plat = float(s["place"].get("lat", p_lat))
+            plng = float(s["place"].get("lng", p_lng))
+            total_dist += haversine(p_lat, p_lng, plat, plng)
+            p_lat, p_lng = plat, plng
+        st.caption(f"🧭 이 날 총 이동거리(직선거리 기준): 약 **{total_dist:.1f}km**  ·  동선 최적화 적용됨")
+
     prev_lat, prev_lng = ulat, ulng
     prev_name = stay_name
     for s in day_info.get("slots", []):

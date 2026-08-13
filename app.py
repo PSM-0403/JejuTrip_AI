@@ -14,6 +14,7 @@
 
 import streamlit as st
 import datetime
+import json
 from config import PAGE_CONFIG, CATEGORIES, KAKAO_API_KEY, OPENAI_API_KEY
 from data_manager import DataManager
 from kakao_service import KakaoService
@@ -85,7 +86,31 @@ with st.sidebar:
 
     st.divider()
 
-    # ── 2. 숙소 검색 (🗺️ 카카오 API) ──────────────────────
+    # ── 2. 저장된 코스 불러오기 ──────────────────────────────
+    today = datetime.date.today()
+    st.markdown("### 📂 저장된 코스 불러오기")
+    uploaded = st.file_uploader("코스 JSON 파일 선택", type=["json"], key="course_upload",
+                                label_visibility="collapsed")
+    if uploaded is not None and st.session_state.get("_last_loaded_file") != uploaded.name:
+        try:
+            data = json.load(uploaded)
+            loaded_itin = (data.get("itinerary") or [])[:7]
+            loaded_days = max(1, len(loaded_itin))
+            st.session_state.itinerary = loaded_itin
+            st.session_state.stay_name = data.get("stay_name", st.session_state.stay_name)
+            st.session_state.user_lat  = float(data.get("user_lat", st.session_state.user_lat))
+            st.session_state.user_lng  = float(data.get("user_lng", st.session_state.user_lng))
+            st.session_state["trip_dates"] = (today, today + datetime.timedelta(days=loaded_days - 1))
+            st.session_state["_last_loaded_file"] = uploaded.name
+            st.success(f"✅ 저장된 코스를 불러왔습니다 ({loaded_days}일 코스)")
+            st.rerun()
+        except Exception as e:
+            st.error(f"⚠️ 코스 파일을 읽지 못했습니다: {e}")
+    st.caption("이전에 저장(💾)한 JSON 파일을 올리면 코스·숙소 위치가 복원됩니다")
+
+    st.divider()
+
+    # ── 3. 숙소 검색 (🗺️ 카카오 API) ──────────────────────
     st.markdown("### 🏨 숙소 / 출발지 설정")
     # 변경: 숙소명뿐 아니라 브랜드명·도로명 주소·지번 주소도 같은 입력창에서 검색할 수 있게 안내 문구를 확장한다.
     st.caption("🗺️ 카카오 API로 숙소명·브랜드명·주소를 실시간 검색합니다")
@@ -120,12 +145,13 @@ with st.sidebar:
     st.caption(f"📍 현재 기준 위치: **{st.session_state.stay_name}**")
     st.divider()
 
-    # ── 3. 여행 설정 ────────────────────────────────────────
+    # ── 4. 여행 설정 ────────────────────────────────────────
     st.markdown("### ⚙️ 여행 설정")
-    today      = datetime.date.today()
+    if "trip_dates" not in st.session_state:
+        st.session_state["trip_dates"] = (today, today + datetime.timedelta(days=1))
     date_range = st.date_input(
         "🗓️ 여행 기간",
-        value=(today, today + datetime.timedelta(days=1)),
+        key="trip_dates",
         min_value=today,
     )
     if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
@@ -186,7 +212,7 @@ with st.sidebar:
 
     st.divider()
 
-    # ── 4. 챗봇 토글 버튼 ───────────────────────────────────
+    # ── 5. 챗봇 토글 버튼 ───────────────────────────────────
     chat_lbl = "💬 AI 챗봇 닫기 ✕" if st.session_state.chat_open else "💬 AI 챗봇 열기 ▲"
     if st.button(chat_lbl, use_container_width=True, type="secondary"):
         st.session_state.chat_open = not st.session_state.chat_open
@@ -213,7 +239,7 @@ st.success(f"📊 CSV 데이터 로딩 완료: 총 **{stats['total']}개** 장�
 st.divider()
 
 # ── 추천 생성 버튼 ──────────────────────────────────────────
-bc1, bc2 = st.columns([4, 1])
+bc1, bc2, bc3 = st.columns([3, 1, 1])
 with bc1:
     gen_btn = st.button(
         "🚀 여행 코스 추천 생성", type="primary",
@@ -221,9 +247,29 @@ with bc1:
         disabled=(not sel_cats or num_days > 7),
     )
 with bc2:
-    if st.session_state.itinerary and st.button("🔄 초기화"):
+    if st.session_state.itinerary and st.button("🔄 초기화", use_container_width=True):
         st.session_state.itinerary = []
         st.rerun()
+with bc3:
+    if st.session_state.itinerary:
+        def _json_default(o):
+            # numpy 스칼라(float64/int64 등) → 순수 파이썬 타입 변환
+            return o.item() if hasattr(o, "item") else str(o)
+
+        save_payload = {
+            "version": 1,
+            "saved_at": datetime.datetime.now().isoformat(timespec="seconds"),
+            "stay_name": st.session_state.stay_name,
+            "user_lat": st.session_state.user_lat,
+            "user_lng": st.session_state.user_lng,
+            "itinerary": st.session_state.itinerary,
+        }
+        st.download_button(
+            "💾 저장", use_container_width=True,
+            data=json.dumps(save_payload, ensure_ascii=False, default=_json_default, indent=2).encode("utf-8"),
+            file_name=f"jejutrip_course_{today.isoformat()}.json",
+            mime="application/json",
+        )
 
 if not sel_cats:
     st.warning("⚠️ 카테고리를 1개 이상 선택해주세요.")

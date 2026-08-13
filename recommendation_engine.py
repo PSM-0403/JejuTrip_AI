@@ -67,6 +67,7 @@ class RecommendationEngine:
             }
 
             slots = []
+            cur_lat, cur_lng = ulat, ulng  # 동선 최적화: 하루의 현재 위치 (숙소에서 출발)
             for slot in TIME_SLOTS:
                 slot_cat = slot["cat"]
 
@@ -87,9 +88,11 @@ class RecommendationEngine:
                 # 이 일차·슬롯에 입력된 취향 키워드 (없으면 빈 리스트 → 기본 추천)
                 pref_kw = kw_map.get(slot["key"], [])
 
-                place = self._pick(df, pick_cat, slot["kw"], ulat, ulng, used, pref_kw, radius_km, chroma_boost)
+                place = self._pick(df, pick_cat, slot["kw"], ulat, ulng, used, pref_kw, radius_km, chroma_boost,
+                                   ref_lat=cur_lat, ref_lng=cur_lng)
                 if place:
                     used.add(place["name"])
+                    cur_lat, cur_lng = float(place["lat"]), float(place["lng"])  # 다음 슬롯은 이 장소 기준으로 거리 계산
                     pos_rv, neg_rv = self._classify_reviews(place.get("reviews_text", ""))
                     slots.append({
                         "slot":        slot,
@@ -136,11 +139,16 @@ class RecommendationEngine:
               kw: list,
               ulat: float, ulng: float, used: set,
               pref_kw: Optional[List[str]] = None, radius_km: float = 30,
-              chroma_boost: Optional[Dict] = None) -> Optional[Dict]:
+              chroma_boost: Optional[Dict] = None,
+              ref_lat: Optional[float] = None, ref_lng: Optional[float] = None) -> Optional[Dict]:
         """카테고리+키워드+거리+평점 종합 점수로 최적 장소 선택  |  📊 CSV
-        cat에 리스트를 넘기면 해당 카테고리들을 통합 풀로 사용 (관광 슬롯 등)"""
+        cat에 리스트를 넘기면 해당 카테고리들을 통합 풀로 사용 (관광 슬롯 등)
+        ref_lat/ref_lng: 동선 최적화용 기준점 (직전 방문 장소). 생략 시 ulat/ulng(숙소) 사용.
+        radius_km 반경 필터는 항상 숙소(ulat/ulng) 기준으로 유지 — 사이드바 설정과 일관성 유지."""
         pref_kw = pref_kw or []
         chroma_boost = chroma_boost or {}
+        ref_lat = ulat if ref_lat is None else ref_lat
+        ref_lng = ulng if ref_lng is None else ref_lng
         def _cat_filter(d: pd.DataFrame) -> pd.DataFrame:
             if isinstance(cat, list):
                 return d[d["category"].isin(cat)]
@@ -154,7 +162,7 @@ class RecommendationEngine:
             return None
 
         pool = pool.copy()
-        # 반경 필터링: 선택한 km 이내 장소만 포함
+        # 반경 필터링: 숙소 기준 선택한 km 이내 장소만 포함 (사이드바 설정 그대로 유지)
         pool["_dist"] = pool.apply(
             lambda r: haversine(ulat, ulng, float(r["lat"]), float(r["lng"])), axis=1
         )
@@ -162,6 +170,11 @@ class RecommendationEngine:
         if not in_radius.empty:
             pool = in_radius.copy()
         # 반경 내 장소가 없으면 필터 없이 전체에서 선택 (fallback)
+
+        # 동선 최적화용 거리: 직전 방문 장소(ref_lat/ref_lng) 기준 — 기본은 숙소와 동일
+        pool["_route_dist"] = pool.apply(
+            lambda r: haversine(ref_lat, ref_lng, float(r["lat"]), float(r["lng"])), axis=1
+        )
 
         # 4-0. 취향 키워드 하드 필터 — 매칭 장소가 있으면 반드시 그 장소들로만 후보 제한
         #      (데이터에 없는 음식/특징을 가진 장소를 추천하는 할루시네이션 방지)
@@ -193,8 +206,8 @@ class RecommendationEngine:
         # 4-1. Chroma 리뷰 유사도 부스트 (취향 입력 시)
         if chroma_boost:
             pool["_score"] += pool["name"].map(chroma_boost).fillna(0)
-        # 5. 거리 패널티
-        pool["_score"] -= pool["_dist"].clip(0, 60) * 0.5
+        # 5. 거리 패널티 (동선 최적화: 직전 방문 장소 기준 — 이동 동선이 튀지 않도록)
+        pool["_score"] -= pool["_route_dist"].clip(0, 60) * 0.5
 
         # 상위 5개 중 무작위 1개 (다양성 확보)
         top5 = pool.nlargest(5, "_score")
