@@ -9,9 +9,21 @@
 # ============================================================
 
 import os
+from typing import Optional
 import pandas as pd
 import streamlit as st
 from config import CATEGORY_MAP
+
+
+@st.cache_data(show_spinner=False)
+def _read_csv_any_encoding(path: str, encodings: tuple) -> Optional[pd.DataFrame]:
+    """주어진 인코딩들을 순서대로 시도해 CSV를 읽는다 (Streamlit 재실행 간 캐싱)."""
+    for enc in encodings:
+        try:
+            return pd.read_csv(path, encoding=enc)
+        except UnicodeDecodeError:
+            continue
+    return None
 
 
 class DataManager:
@@ -24,7 +36,9 @@ class DataManager:
                   "rating", "total_cnt", "reviews_text", "keywords", "place_url"]
 
     def __init__(self):
-        self.df: pd.DataFrame = pd.DataFrame()
+        # 로딩 실패 시에도 REQUIRED 컬럼이 갖춰진 빈 DataFrame으로 시작
+        # (stats()/filter_by_cats() 등이 없는 컬럼 참조로 크래시하지 않도록)
+        self.df: pd.DataFrame = self._clean(pd.DataFrame())
         self._load()
 
     # ── 내부: 로딩 ──────────────────────────────────────────
@@ -33,16 +47,14 @@ class DataManager:
         for path in self.CSV_FILES:
             if not os.path.exists(path):
                 continue
-            for enc in self.ENCODINGS:
-                try:
-                    df = pd.read_csv(path, encoding=enc)
-                    self.df = self._clean(df)
-                    return
-                except UnicodeDecodeError:
-                    continue
-                except Exception as e:
-                    st.error(f"CSV 로딩 오류: {e}")
-                    return
+            try:
+                raw = _read_csv_any_encoding(path, tuple(self.ENCODINGS))
+            except Exception as e:
+                st.error(f"CSV 로딩 오류: {e}")
+                return
+            if raw is not None:
+                self.df = self._clean(raw)
+                return
         st.warning("⚠️ jeju_crawling_100.csv를 찾지 못했습니다. 파일 경로를 확인해주세요.")
 
     # jeju_crawling_100.csv 컬럼 → 표준 컬럼 매핑

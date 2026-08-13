@@ -46,11 +46,13 @@ class RecommendationEngine:
     # ── 자동 추천 ───────────────────────────────────────────
     def auto_recommend(self, num_days: int, cats: List[str],
                        ulat: float, ulng: float,
-                       pref_slots: Dict = {},  # {day(int): {slot_key: 취향 텍스트}}
+                       pref_slots: Optional[Dict] = None,  # {day(int): {slot_key: 취향 텍스트}}
                        radius_km: float = 30,
-                       chroma_boost: Dict = {}) -> List[Dict]:
+                       chroma_boost: Optional[Dict] = None) -> List[Dict]:
         """시간대별 자동 추천 코스 생성  |  📊 CSV 데이터
         일차·슬롯별 독립 취향 적용. 입력 없는 슬롯은 기본 추천."""
+        pref_slots = pref_slots or {}
+        chroma_boost = chroma_boost or {}
         df = self.dm.filter_by_cats(cats)
         used = set()
         itinerary = []
@@ -133,10 +135,12 @@ class RecommendationEngine:
     def _pick(self, df: pd.DataFrame, cat,   # cat: str 또는 List[str]
               kw: list,
               ulat: float, ulng: float, used: set,
-              pref_kw: List[str] = [], radius_km: float = 30,
-              chroma_boost: Dict = {}) -> Optional[Dict]:
+              pref_kw: Optional[List[str]] = None, radius_km: float = 30,
+              chroma_boost: Optional[Dict] = None) -> Optional[Dict]:
         """카테고리+키워드+거리+평점 종합 점수로 최적 장소 선택  |  📊 CSV
         cat에 리스트를 넘기면 해당 카테고리들을 통합 풀로 사용 (관광 슬롯 등)"""
+        pref_kw = pref_kw or []
+        chroma_boost = chroma_boost or {}
         def _cat_filter(d: pd.DataFrame) -> pd.DataFrame:
             if isinstance(cat, list):
                 return d[d["category"].isin(cat)]
@@ -279,7 +283,7 @@ class RecommendationEngine:
                     f"콤마 구분 단어 목록만 반환. 예시) 말고기,흑돼지,바다뷰"
                 )
                 res = self.ai.chat.completions.create(
-                    model="gpt-4o-mini",
+                    model=OPENAI_MODEL,
                     messages=[{"role": "user", "content": prompt}],
                     max_completion_tokens=60,
                 )
@@ -450,7 +454,7 @@ class RecommendationEngine:
                         f"이 장소의 특징을 한 문장(20자 내)으로만 설명해줘."
                     )
                     res = self.ai.chat.completions.create(
-                        model="gpt-4o-mini",
+                        model=OPENAI_MODEL,
                         messages=[{"role": "user", "content": prompt}],
                         max_completion_tokens=60,
                     )

@@ -34,9 +34,11 @@ def kakao_badge():
 def render_place_card(slot: Dict, place: Dict, reason: str,
                       prev_lat: float, prev_lng: float,
                       kakao: Optional[KakaoService] = None,
-                      pos_reviews: List = [], neg_reviews: List = [],
+                      pos_reviews: Optional[List] = None, neg_reviews: Optional[List] = None,
                       prev_name: str = "출발지"):
     """단일 장소 카드 렌더링 (데이터 출처 구분 포함)"""
+    pos_reviews = pos_reviews or []
+    neg_reviews = neg_reviews or []
     with st.container():
         # ── 헤더 ──
         c1, c2 = st.columns([5, 2])

@@ -20,7 +20,7 @@ try:
 except ImportError:
     OPENAI_OK = False
 
-from config import TIME_SLOTS
+from config import TIME_SLOTS, OPENAI_MODEL
 from kakao_service import haversine
 
 _SLOT_LABELS = {s["key"]: s["label"] for s in TIME_SLOTS}
@@ -79,7 +79,7 @@ def _detect_intent(user_text: str, itinerary: list, client) -> dict:
     )
     try:
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=OPENAI_MODEL,
             messages=[{"role": "user", "content": prompt}],
             max_completion_tokens=80,
             response_format={"type": "json_object"},
@@ -90,7 +90,7 @@ def _detect_intent(user_text: str, itinerary: list, client) -> dict:
 
 
 # ── 후보 장소 조회 ────────────────────────────────────────────
-def _get_candidates(day: int, slot_key: str, keyword: str, dm, ulat: float, ulng: float, n: int = 5) -> list:
+def _get_candidates(day: int, slot_key: str, keyword: str, dm, ulat: float, ulng: float, n: int = 5, radius_km: float = 30) -> list:
     """해당 슬롯·키워드 기준 상위 N개 장소 반환 (수정 없이 조회만)
     챗 입력 keyword + 사이드바 pref_kw_map 조건을 모두 반영."""
     slot_def = next((s for s in TIME_SLOTS if s["key"] == slot_key), None)
@@ -111,7 +111,7 @@ def _get_candidates(day: int, slot_key: str, keyword: str, dm, ulat: float, ulng
     pool["_dist"] = pool.apply(
         lambda r: haversine(ulat, ulng, float(r["lat"]), float(r["lng"])), axis=1
     )
-    in_radius = pool[pool["_dist"] <= 30]
+    in_radius = pool[pool["_dist"] <= radius_km]
     if not in_radius.empty:
         pool = in_radius.copy()
 
@@ -180,7 +180,7 @@ def _classify_reviews(reviews_text: str, client) -> tuple:
                 f"코드블록 없이 JSON만 반환: {{\"pos\": [\"요약1\", \"요약2\"], \"neg\": [\"요약1\"]}}"
             )
             resp    = client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=OPENAI_MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 max_completion_tokens=300,
             )
@@ -234,10 +234,10 @@ def _apply_place(day: int, slot_key: str, new_place: dict, client, keyword: str 
     )
 
 
-def _apply_modification(day: int, slot_key: str, keyword: str, dm, ulat: float, ulng: float, client=None) -> str:
+def _apply_modification(day: int, slot_key: str, keyword: str, dm, ulat: float, ulng: float, client=None, radius_km: float = 30) -> str:
     """키워드 기반으로 최적 장소 1개를 즉시 선택·교체"""
     import random
-    candidates = _get_candidates(day, slot_key, keyword, dm, ulat, ulng, n=5)
+    candidates = _get_candidates(day, slot_key, keyword, dm, ulat, ulng, n=5, radius_km=radius_km)
     if not candidates:
         return "⚠️ 해당 조건에 맞는 장소를 찾지 못했습니다."
 
@@ -257,7 +257,7 @@ def _apply_modification(day: int, slot_key: str, keyword: str, dm, ulat: float, 
 
 
 # ── 챗봇 UI ─────────────────────────────────────────────────
-def render_chatbot(itinerary: list, openai_key: str, dm=None):
+def render_chatbot(itinerary: list, openai_key: str, dm=None, radius_km: float = 30):
     if not openai_key or not OPENAI_OK:
         st.warning("💡 챗봇을 사용하려면 OpenAI API 키를 입력하고 연결을 확인해주세요.")
         return
@@ -274,7 +274,7 @@ def render_chatbot(itinerary: list, openai_key: str, dm=None):
     with col_info:
         total = len([m for m in st.session_state.chat_msgs if m["role"] == "user"])
         hint  = "  ·  💡 \"N일차 슬롯 바꿔줘\" 또는 \"추천 리스트 줘\"" if itinerary and dm else ""
-        st.caption(f"🗨️ 대화 {total}턴 · 최근 10턴 AI 참고 · gpt-4o-mini{hint}")
+        st.caption(f"🗨️ 대화 {total}턴 · 최근 10턴 AI 참고 · {OPENAI_MODEL}{hint}")
     with col_clr:
         if st.button("🗑️ 초기화", key="chat_clear_btn", use_container_width=True):
             st.session_state.chat_msgs       = []
@@ -314,6 +314,7 @@ def render_chatbot(itinerary: list, openai_key: str, dm=None):
         reply = _apply_modification(
             intent.get("day", 1), intent.get("slot_key", ""),
             intent.get("keyword", ""), dm, ulat, ulng, client,
+            radius_km=radius_km,
         )
         with st.chat_message("assistant", avatar="🤖"):
             st.markdown(reply)
@@ -327,7 +328,7 @@ def render_chatbot(itinerary: list, openai_key: str, dm=None):
         day      = intent.get("day", 1)
         slot_key = intent.get("slot_key", "")
         keyword  = intent.get("keyword", "")
-        candidates = _get_candidates(day, slot_key, keyword, dm, ulat, ulng, n=5)
+        candidates = _get_candidates(day, slot_key, keyword, dm, ulat, ulng, n=5, radius_km=radius_km)
         if candidates:
             st.session_state._candidate_list = {"day": day, "slot_key": slot_key, "candidates": candidates}
             reply = _format_candidates(day, slot_key, keyword, candidates)
@@ -376,7 +377,7 @@ def render_chatbot(itinerary: list, openai_key: str, dm=None):
         reply = ""
         try:
             stream = client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=OPENAI_MODEL,
                 messages=[{"role": "system", "content": system}] + recent,
                 max_completion_tokens=600,
                 stream=True,

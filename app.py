@@ -61,7 +61,8 @@ def _check_api():
             from openai import OpenAI
             OpenAI(api_key=st.session_state.openai_key).models.list()
             st.session_state.openai_ok = True
-        except Exception:
+        except Exception as e:
+            print("OPENAI CONNECT ERROR:", repr(e))
             st.session_state.openai_ok = False
 
 _init()
@@ -308,4 +309,4 @@ if st.session_state.chat_open:
         "현재 추천 코스 관련 질문이나 제주 여행 정보를 자유롭게 질문하세요. "
         "📊 CSV 기반 추천 코스 컨텍스트를 AI가 참고합니다."
     )
-    render_chatbot(st.session_state.itinerary, st.session_state.openai_key, dm)
+    render_chatbot(st.session_state.itinerary, st.session_state.openai_key, dm, radius_km=radius_km)

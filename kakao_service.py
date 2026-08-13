@@ -49,8 +49,11 @@ class KakaoService:
                 params={"query": "제주", "size": 1},
                 timeout=5,
             )
+            if r.status_code != 200:
+                print(f"KAKAO CONNECT ERROR: status={r.status_code} body={r.text[:200]}")
             return r.status_code == 200
-        except Exception:
+        except Exception as e:
+            print("KAKAO CONNECT ERROR:", repr(e))
             return False
 
     # ── 숙소 검색 ────────────────────────────────────────────

@@ -78,8 +78,6 @@ OPENAI_MODEL=gpt-4o-mini             # 기본값
 - **카카오 API 키**: [카카오 개발자 콘솔](https://developers.kakao.com) → 앱 생성 → REST API 키
 - **OpenAI API 키**: [OpenAI Platform](https://platform.openai.com/api-keys)
 
-> `.env` 설정 없이도 앱 실행 후 사이드바에서 직접 키를 입력할 수 있습니다.
-
 ### 3. (선택) Chroma 리뷰 DB 재구축
 
 `chroma_jeju_reviews/`가 이미 레포에 포함되어 있으므로 일반적으로 불필요합니다.  
@@ -122,7 +120,7 @@ OPENAI_MODEL = "gpt-4o-mini"
 | 항목 | 내용 |
 |------|------|
 | Chroma DB | `chroma_jeju_reviews/`가 레포에 포함되어 있어 클라우드에서도 즉시 사용 가능 |
-| API 키 | Streamlit Secrets에 등록하거나 앱 사이드바에서 직접 입력 |
+| API 키 | Streamlit Secrets에 등록 (필수) |
 | Python | `.python-version` 파일로 3.11 고정 |
 
 ---
