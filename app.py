@@ -239,37 +239,11 @@ st.success(f"📊 CSV 데이터 로딩 완료: 총 **{stats['total']}개** 장�
 st.divider()
 
 # ── 추천 생성 버튼 ──────────────────────────────────────────
-bc1, bc2, bc3 = st.columns([3, 1, 1])
-with bc1:
-    gen_btn = st.button(
-        "🚀 여행 코스 추천 생성", type="primary",
-        use_container_width=True,
-        disabled=(not sel_cats or num_days > 7),
-    )
-with bc2:
-    if st.session_state.itinerary and st.button("🔄 초기화", use_container_width=True):
-        st.session_state.itinerary = []
-        st.rerun()
-with bc3:
-    if st.session_state.itinerary:
-        def _json_default(o):
-            # numpy 스칼라(float64/int64 등) → 순수 파이썬 타입 변환
-            return o.item() if hasattr(o, "item") else str(o)
-
-        save_payload = {
-            "version": 1,
-            "saved_at": datetime.datetime.now().isoformat(timespec="seconds"),
-            "stay_name": st.session_state.stay_name,
-            "user_lat": st.session_state.user_lat,
-            "user_lng": st.session_state.user_lng,
-            "itinerary": st.session_state.itinerary,
-        }
-        st.download_button(
-            "💾 저장", use_container_width=True,
-            data=json.dumps(save_payload, ensure_ascii=False, default=_json_default, indent=2).encode("utf-8"),
-            file_name=f"jejutrip_course_{today.isoformat()}.json",
-            mime="application/json",
-        )
+gen_btn = st.button(
+    "🚀 여행 코스 추천 생성", type="primary",
+    use_container_width=True,
+    disabled=(not sel_cats or num_days > 7),
+)
 
 if not sel_cats:
     st.warning("⚠️ 카테고리를 1개 이상 선택해주세요.")
@@ -312,6 +286,33 @@ if gen_btn and sel_cats:
             st.success(f"✅ **{len(matched_places)}개** 장소에서 취향 키워드 반영됨: {', '.join(matched_places)}")
         else:
             st.warning("⚠️ CSV 데이터에 일치하는 장소가 없거나 적습니다. 다른 표현으로 시도해보세요.")
+
+# ── 초기화 / 저장 버튼 (코스 생성 직후 바로 노출) ────────────
+if st.session_state.itinerary:
+    bc2, bc3 = st.columns(2)
+    with bc2:
+        if st.button("🔄 초기화", use_container_width=True):
+            st.session_state.itinerary = []
+            st.rerun()
+    with bc3:
+        def _json_default(o):
+            # numpy 스칼라(float64/int64 등) → 순수 파이썬 타입 변환
+            return o.item() if hasattr(o, "item") else str(o)
+
+        save_payload = {
+            "version": 1,
+            "saved_at": datetime.datetime.now().isoformat(timespec="seconds"),
+            "stay_name": st.session_state.stay_name,
+            "user_lat": st.session_state.user_lat,
+            "user_lng": st.session_state.user_lng,
+            "itinerary": st.session_state.itinerary,
+        }
+        st.download_button(
+            "💾 저장", use_container_width=True,
+            data=json.dumps(save_payload, ensure_ascii=False, default=_json_default, indent=2).encode("utf-8"),
+            file_name=f"jejutrip_course_{today.isoformat()}.json",
+            mime="application/json",
+        )
 
 # ── 결과 탭 ─────────────────────────────────────────────────
 if st.session_state.itinerary:
