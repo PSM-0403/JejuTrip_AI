@@ -1,9 +1,8 @@
 # ============================================================
 # recommendation_engine.py  |  여행 코스 추천 엔진
 # ============================================================
-# 역할: CSV 데이터 기반 추천 로직 (두 가지 모드)
-#   1. 자동 추천: 시간대별 슬롯에 맞는 장소 자동 배치
-#   2. 직접 구성: 사용자 선택 활동 순서에 장소 매칭
+# 역할: CSV 데이터 기반 자동 추천 로직
+#   - 시간대별 슬롯에 맞는 장소 자동 배치
 #
 # 점수 계산 기준 (📊 CSV 데이터):
 #   - 평점(rating) * 10
@@ -108,31 +107,6 @@ class RecommendationEngine:
             itinerary = self._ai_enrich(itinerary)
 
         return itinerary
-
-    # ── 직접 구성 ───────────────────────────────────────────
-    def manual_recommend(self, schedule: List[Dict],
-                         ulat: float, ulng: float,
-                         cats: List[str], preferences: str = "") -> List[Dict]:
-        """사용자 직접 구성 일정에 장소 매칭  |  📊 CSV 데이터"""
-        df = self.dm.filter_by_cats(cats)
-        used = set()
-        days: Dict[int, list] = {}
-        pref_kw = self._extract_pref_keywords(preferences) if preferences else []
-
-        for item in schedule:
-            day = item["day"]
-            cat = self._activity_to_cat(item["activity"])
-            slot = {"key": f"manual_{day}", "label": item["activity"],
-                    "time": item["time_slot"], "cat": cat, "kw": []}
-            place = self._pick(df, cat, [], ulat, ulng, used, pref_kw)
-            if place:
-                used.add(place["name"])
-                days.setdefault(day, []).append({
-                    "slot": slot, "place": place,
-                    "reason": self._reason(place, slot, pref_kw),
-                })
-
-        return [{"day": d, "slots": s, "pref_kw": pref_kw} for d, s in sorted(days.items())]
 
     # ── 내부: 장소 선택 ─────────────────────────────────────
     def _pick(self, df: pd.DataFrame, cat,   # cat: str 또는 List[str]
@@ -429,13 +403,6 @@ class RecommendationEngine:
             if alt in cats:
                 return alt
         return None
-
-    # ── 내부: 활동 → 카테고리 변환 ─────────────────────────
-    @staticmethod
-    def _activity_to_cat(activity: str) -> str:
-        m = {"카페/디저트": "카페", "산책/자연": "자연",
-             "관광/문화": "문화", "맛집": "맛집", "쇼핑/시장": "기타"}
-        return m.get(activity, "기타")
 
     # ── OpenAI 추천 사유 보강 (선택) ─────────────────────────
     def _ai_enrich(self, itinerary: list) -> list:

@@ -7,7 +7,7 @@
 #   1. API 키 수동 입력 + 연결 상태 자동 확인
 #   2. 숙소 검색 (🗺️ 카카오 API)
 #   3. 여행 기간 / 카테고리 / AI 맞춤 조건 설정
-#   4. 자동 추천 코스 생성 OR 사용자 직접 구성
+#   4. 자동 추천 코스 생성
 #   5. 결과: 일차별 탭 + 전체 지도 탭 + 코스 분석 탭
 #   6. 우측 하단 플로팅 AI 챗봇 (OpenAI)
 # ============================================================
@@ -213,7 +213,7 @@ with st.sidebar:
     st.divider()
 
     # ── 5. 챗봇 토글 버튼 ───────────────────────────────────
-    chat_lbl = "💬 AI 챗봇 닫기 ✕" if st.session_state.chat_open else "💬 AI 챗봇 열기 ▲"
+    chat_lbl = "💬 AI 챗봇 닫기 ▲" if st.session_state.chat_open else "💬 AI 챗봇 열기 ▼"
     if st.button(chat_lbl, use_container_width=True, type="secondary"):
         st.session_state.chat_open = not st.session_state.chat_open
         st.rerun()
@@ -293,6 +293,10 @@ if st.session_state.itinerary:
     with bc2:
         if st.button("🔄 초기화", use_container_width=True):
             st.session_state.itinerary = []
+            # 코스가 사라지면 챗봇이 참조하던 대화·후보도 함께 정리 (더 이상 존재하지 않는 장소를 언급하지 않도록)
+            st.session_state.chat_msgs = []
+            st.session_state._pending_chat = None
+            st.session_state._candidate_list = None
             st.rerun()
     with bc3:
         def _json_default(o):

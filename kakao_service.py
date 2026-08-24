@@ -10,6 +10,7 @@
 
 import requests
 import math
+import streamlit as st
 from typing import List, Dict, Optional
 
 
@@ -194,26 +195,16 @@ class KakaoService:
 
     # ── 장소 전화번호 조회 ───────────────────────────────────
     def get_phone(self, name: str, lat: float, lng: float) -> str:
-        """장소명 + 좌표로 카카오 검색 후 전화번호 반환  🗺️ 카카오 API"""
+        """장소명 + 좌표로 카카오 검색 후 전화번호 반환  🗺️ 카카오 API
+        결과는 캐싱되어 동일 장소에 대해 Streamlit rerun마다 재호출하지 않음."""
         if not self.key or not name:
             return ""
-        try:
-            r = requests.get(
-                self.SEARCH_URL,
-                headers=self.headers,
-                params={"query": name, "x": str(lng), "y": str(lat), "radius": 300, "size": 1},
-                timeout=5,
-            )
-            if r.status_code != 200:
-                return ""
-            docs = r.json().get("documents", [])
-            return docs[0].get("phone", "") if docs else ""
-        except Exception:
-            return ""
+        return _cached_get_phone(self.key, name, lat, lng)
 
     # ── 네비게이션 경로 계산 ─────────────────────────────────
     def get_route(self, ox: float, oy: float, dx: float, dy: float) -> Optional[Dict]:
         """카카오 네비게이션 기준 경로·시간·거리 계산  🗺️ 카카오 API
+        결과는 캐싱되어 동일 출발/도착 좌표에 대해 Streamlit rerun마다 재호출하지 않음.
 
         Args:
             ox, oy: 출발 경도·위도
@@ -223,23 +214,51 @@ class KakaoService:
         """
         if not self.key:
             return None
-        try:
-            r = requests.get(
-                self.NAVI_URL,
-                headers=self.headers,
-                params={"origin": f"{ox},{oy}", "destination": f"{dx},{dy}"},
-                timeout=8,
-            )
-            if r.status_code != 200:
-                return None
-            routes = r.json().get("routes", [])
-            if not routes:
-                return None
-            s = routes[0].get("summary", {})
-            return {
-                "distance_km":  round(s.get("distance", 0) / 1000, 1),
-                "duration_min": round(s.get("duration", 0) / 60),
-                "source": "카카오 네비게이션 API",   # 출처 명시
-            }
-        except Exception:
+        return _cached_get_route(self.key, ox, oy, dx, dy)
+
+
+# ── 캐시된 API 호출 (모듈 레벨 — Streamlit rerun 간 결과 재사용) ──
+# 카드 하나당 전화번호·경로 API를 매번 새로 부르면 일정이 길어질수록
+# (최대 7일 x 6슬롯 x 2호출 = 84회) 매 rerun마다 반복 호출되어 느려짐.
+# api_key를 인자로 받아 캐시 키에 포함시켜 세션 간에도 안전하게 재사용한다.
+@st.cache_data(show_spinner=False, ttl=3600)
+def _cached_get_phone(api_key: str, name: str, lat: float, lng: float) -> str:
+    headers = {"Authorization": f"KakaoAK {api_key}"}
+    try:
+        r = requests.get(
+            KakaoService.SEARCH_URL,
+            headers=headers,
+            params={"query": name, "x": str(lng), "y": str(lat), "radius": 300, "size": 1},
+            timeout=5,
+        )
+        if r.status_code != 200:
+            return ""
+        docs = r.json().get("documents", [])
+        return docs[0].get("phone", "") if docs else ""
+    except Exception:
+        return ""
+
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def _cached_get_route(api_key: str, ox: float, oy: float, dx: float, dy: float) -> Optional[Dict]:
+    headers = {"Authorization": f"KakaoAK {api_key}"}
+    try:
+        r = requests.get(
+            KakaoService.NAVI_URL,
+            headers=headers,
+            params={"origin": f"{ox},{oy}", "destination": f"{dx},{dy}"},
+            timeout=8,
+        )
+        if r.status_code != 200:
             return None
+        routes = r.json().get("routes", [])
+        if not routes:
+            return None
+        s = routes[0].get("summary", {})
+        return {
+            "distance_km":  round(s.get("distance", 0) / 1000, 1),
+            "duration_min": round(s.get("duration", 0) / 60),
+            "source": "카카오 네비게이션 API",   # 출처 명시
+        }
+    except Exception:
+        return None
