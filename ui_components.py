@@ -142,7 +142,8 @@ def render_day_course(day_info: Dict, ulat: float, ulng: float,
 def render_full_map(itinerary: List[Dict], ulat: float, ulng: float,
                     stay_name: str = "숙소"):
     """일차별 동선을 색상으로 구분해 지도에 표시  |  🗺️ Folium + 카카오 연동"""
-    m = folium.Map(location=[ulat, ulng], zoom_start=11, tiles="CartoDB positron")
+    # CartoDB 타일은 API 키 등록이 필요해져 워터마크가 뜸 → 키 없이 쓸 수 있는 OpenStreetMap으로 대체
+    m = folium.Map(location=[ulat, ulng], zoom_start=11, tiles="OpenStreetMap")
     # 숙소 마커
     folium.Marker(
         [ulat, ulng], tooltip=stay_name,
