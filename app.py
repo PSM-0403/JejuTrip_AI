@@ -336,9 +336,13 @@ if st.session_state.itinerary:
     if st.session_state.get("course_briefing"):
         st.info(f"🧭 {st.session_state.course_briefing}")
 
-    day_tabs   = [f"📅 {d}일차" for d in range(1, num_days + 1)]
-    extra_tabs = ["🗺️ 전체 지도", "📊 코스 생성 분석"]
-    all_tabs   = st.tabs(day_tabs + extra_tabs)
+    # 탭 개수는 사이드바의 num_days가 아니라 실제 itin 길이 기준으로 맞춘다.
+    # (코스를 불러온 뒤 재생성 없이 여행 기간만 바꾸면 num_days와 itin 길이가 어긋나
+    #  일차 탭에 전체지도/분석 탭 내용이 섞여 들어가는 문제 방지)
+    result_days = len(itin)
+    day_tabs    = [f"📅 {d}일차" for d in range(1, result_days + 1)]
+    extra_tabs  = ["🗺️ 전체 지도", "📊 코스 생성 분석"]
+    all_tabs    = st.tabs(day_tabs + extra_tabs)
 
     # 일차별 탭
     for i, day_info in enumerate(itin):
@@ -354,15 +358,15 @@ if st.session_state.itinerary:
             )
 
     # 전체 지도 탭
-    with all_tabs[num_days]:
+    with all_tabs[result_days]:
         st.markdown("### 🗺️ 전체 일정 지도  *(일차별 색상 구분)*")
         st.caption("마커 위치: 📊 CSV 좌표 데이터  ·  지도 렌더링: Folium + 카카오 연동")
         render_full_map(itin, st.session_state.user_lat,
                         st.session_state.user_lng, st.session_state.stay_name)
 
     # 코스 분석 탭
-    with all_tabs[num_days + 1]:
-        render_analysis(itin, sel_cats, preferences, num_days, "자동 추천 코스 생성")
+    with all_tabs[result_days + 1]:
+        render_analysis(itin, sel_cats, preferences, result_days, "자동 추천 코스 생성")
 
 
 # ── AI 챗봇 패널 (하단 표시) ────────────────────────────────
