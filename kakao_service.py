@@ -11,6 +11,7 @@
 import requests
 import math
 import streamlit as st
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Optional
 
 
@@ -215,6 +216,25 @@ class KakaoService:
         if not self.key:
             return None
         return _cached_get_route(self.key, ox, oy, dx, dy)
+
+    # ── 여러 장소의 전화번호·경로를 병렬로 미리 조회 ─────────────
+    def prefetch(self, places: List[Dict]) -> None:
+        """places: [{name, lat, lng, prev_lat, prev_lng}, ...]
+        각 장소의 전화번호·경로 API를 동시에 호출해 캐시를 채워둔다.
+        직렬로 호출하면 장소 수만큼 네트워크 대기시간이 누적되는데,
+        이 호출들은 서로 독립적인 I/O라 병렬로 쏘면 전체 대기시간이 크게 줄어든다.
+        호출 후 get_phone/get_route를 부르면 캐시에서 바로 반환된다."""
+        if not self.key or not places:
+            return
+        with ThreadPoolExecutor(max_workers=min(16, len(places) * 2)) as pool:
+            futures = []
+            for p in places:
+                futures.append(pool.submit(self.get_phone, p["name"], p["lat"], p["lng"]))
+                futures.append(pool.submit(
+                    self.get_route, p["prev_lng"], p["prev_lat"], p["lng"], p["lat"]
+                ))
+            for f in futures:
+                f.result()  # 예외는 각 get_* 내부에서 이미 처리됨
 
 
 # ── 캐시된 API 호출 (모듈 레벨 — Streamlit rerun 간 결과 재사용) ──

@@ -113,29 +113,46 @@ def render_day_course(day_info: Dict, ulat: float, ulng: float,
                       stay_name: str = "숙소"):
     """1개 일차의 전체 슬롯 순서대로 렌더링"""
     slots = day_info.get("slots", [])
-    if slots:
-        total_dist = 0.0
-        p_lat, p_lng = ulat, ulng
-        for s in slots:
-            plat = float(s["place"].get("lat", p_lat))
-            plng = float(s["place"].get("lng", p_lng))
-            total_dist += haversine(p_lat, p_lng, plat, plng)
-            p_lat, p_lng = plat, plng
+
+    # (직전 위치, 슬롯) 체인을 한 번만 계산해 총 이동거리·API 프리페치·카드 렌더링에 재사용
+    chain = []
+    p_lat, p_lng = ulat, ulng
+    for s in slots:
+        plat = float(s["place"].get("lat", p_lat))
+        plng = float(s["place"].get("lng", p_lng))
+        chain.append((p_lat, p_lng, s))
+        p_lat, p_lng = plat, plng
+
+    if chain:
+        total_dist = sum(
+            haversine(pl, pg, float(s["place"].get("lat", pl)), float(s["place"].get("lng", pg)))
+            for pl, pg, s in chain
+        )
         st.caption(f"🧭 이 날 총 이동거리(직선거리 기준): 약 **{total_dist:.1f}km**  ·  동선 최적화 적용됨")
 
-    prev_lat, prev_lng = ulat, ulng
+    # 이 날 카드들의 전화번호·경로를 병렬로 미리 조회해 캐시를 채워둔다
+    # (순차 호출 시 슬롯 수만큼 네트워크 대기시간이 누적되던 부분 개선)
+    if kakao and kakao.key and chain:
+        kakao.prefetch([
+            {
+                "name": s["place"].get("name", ""),
+                "lat":  float(s["place"].get("lat", pl)),
+                "lng":  float(s["place"].get("lng", pg)),
+                "prev_lat": pl, "prev_lng": pg,
+            }
+            for pl, pg, s in chain
+        ])
+
     prev_name = stay_name
-    for s in day_info.get("slots", []):
+    for pl, pg, s in chain:
         render_place_card(
             s["slot"], s["place"], s["reason"],
-            prev_lat, prev_lng, kakao,
+            pl, pg, kakao,
             pos_reviews=s.get("pos_reviews", []),
             neg_reviews=s.get("neg_reviews", []),
             prev_name=prev_name,
         )
         prev_name = s["place"].get("name", prev_name)
-        prev_lat = float(s["place"].get("lat", prev_lat))
-        prev_lng = float(s["place"].get("lng", prev_lng))
 
 
 # ── 전체 지도 탭 ─────────────────────────────────────────────

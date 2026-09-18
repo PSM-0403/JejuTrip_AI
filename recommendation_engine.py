@@ -14,6 +14,7 @@
 
 import random
 import pandas as pd
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Optional
 from config import TIME_SLOTS, OPENAI_MODEL
 from data_manager import DataManager
@@ -92,15 +93,18 @@ class RecommendationEngine:
                 if place:
                     used.add(place["name"])
                     cur_lat, cur_lng = float(place["lat"]), float(place["lng"])  # 다음 슬롯은 이 장소 기준으로 거리 계산
-                    pos_rv, neg_rv = self._classify_reviews(place.get("reviews_text", ""))
                     slots.append({
                         "slot":        slot,
                         "place":       place,
                         "reason":      self._reason(place, slot, pref_kw),
-                        "pos_reviews": pos_rv,
-                        "neg_reviews": neg_rv,
+                        "pos_reviews": [],  # 아래에서 병렬로 채움
+                        "neg_reviews": [],
                     })
             itinerary.append({"day": day, "slots": slots, "pref_kw_map": kw_map})
+
+        # 장소별 리뷰 긍정/부정 요약: 장소마다 독립적인 GPT 호출이라 순차 실행하면
+        # (최대 7일 x 6곳 = 42회) 코스 생성이 느려짐 → 병렬로 한 번에 처리
+        self._classify_reviews_parallel(itinerary)
 
         # OpenAI 추천 사유 보강 (일차별 kw_map 사용)
         if self.ai and any(d.get("pref_kw_map") for d in itinerary):
@@ -378,6 +382,25 @@ class RecommendationEngine:
             else:
                 pos.append(rv)
         return pos[:2], neg[:2]
+
+    def _classify_reviews_parallel(self, itinerary: List[Dict]) -> None:
+        """코스 전체 장소들의 리뷰 긍정/부정 요약을 병렬로 채운다 (itinerary를 in-place 수정).
+        장소마다 독립적인 GPT 호출이라 병렬로 처리하면 코스 생성 시간이 크게 줄어든다."""
+        tasks = [s for day in itinerary for s in day.get("slots", [])]
+        if not tasks:
+            return
+        with ThreadPoolExecutor(max_workers=min(10, len(tasks))) as pool:
+            future_to_slot = {
+                pool.submit(self._classify_reviews, s["place"].get("reviews_text", "")): s
+                for s in tasks
+            }
+            for future, s in future_to_slot.items():
+                try:
+                    pos, neg = future.result()
+                except Exception:
+                    pos, neg = [], []
+                s["pos_reviews"] = pos
+                s["neg_reviews"] = neg
 
     # ── 내부: 슬롯 카테고리 미선택 시 유사 카테고리 fallback ──
     # 관광지 슬롯 / 식음료 슬롯 — 절대 교차 불가

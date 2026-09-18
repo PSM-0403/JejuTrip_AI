@@ -336,36 +336,41 @@ if st.session_state.itinerary:
     if st.session_state.get("course_briefing"):
         st.info(f"🧭 {st.session_state.course_briefing}")
 
-    # 탭 개수는 사이드바의 num_days가 아니라 실제 itin 길이 기준으로 맞춘다.
-    # (코스를 불러온 뒤 재생성 없이 여행 기간만 바꾸면 num_days와 itin 길이가 어긋나
-    #  일차 탭에 전체지도/분석 탭 내용이 섞여 들어가는 문제 방지)
-    result_days = len(itin)
-    day_tabs    = [f"📅 {d}일차" for d in range(1, result_days + 1)]
-    extra_tabs  = ["🗺️ 전체 지도", "📊 코스 생성 분석"]
-    all_tabs    = st.tabs(day_tabs + extra_tabs)
+    # 일차 수는 사이드바의 num_days가 아니라 실제 itin 길이 기준으로 맞춘다.
+    # (코스를 불러온 뒤 재생성 없이 여행 기간만 바꾸면 num_days와 itin 길이가 어긋나는 문제 방지)
+    result_days  = len(itin)
+    day_labels   = [f"📅 {d}일차" for d in range(1, result_days + 1)]
+    extra_labels = ["🗺️ 전체 지도", "📊 코스 생성 분석"]
+    view_labels  = day_labels + extra_labels
 
-    # 일차별 탭
-    for i, day_info in enumerate(itin):
-        with all_tabs[i]:
-            st.markdown(f"## 📅 {day_info['day']}일차 여행 코스")
-            st.caption("📊 장소 정보: CSV 데이터  ·  🗺️ 경로·지도: 카카오 API")
-            render_day_course(
-                day_info,
-                st.session_state.user_lat,
-                st.session_state.user_lng,
-                kakao,
-                stay_name=st.session_state.stay_name,
-            )
+    # st.tabs()는 선택 안 한 탭까지 매번 전부 실행해서, 일차마다 걸리는 카카오 API 호출이
+    # 화면에 안 보이는 탭까지 다 같이 돌며 느려지는 원인이었음.
+    # radio로 바꿔 선택된 화면 하나만 렌더링(=API 호출도 그 하루치만 발생)하도록 개선.
+    if st.session_state.get("result_view") not in view_labels:
+        st.session_state.result_view = view_labels[0]
+    selected_view = st.radio(
+        "결과 보기", view_labels, horizontal=True,
+        label_visibility="collapsed", key="result_view",
+    )
+    st.divider()
 
-    # 전체 지도 탭
-    with all_tabs[result_days]:
+    if selected_view in day_labels:
+        day_info = itin[day_labels.index(selected_view)]
+        st.markdown(f"## 📅 {day_info['day']}일차 여행 코스")
+        st.caption("📊 장소 정보: CSV 데이터  ·  🗺️ 경로·지도: 카카오 API")
+        render_day_course(
+            day_info,
+            st.session_state.user_lat,
+            st.session_state.user_lng,
+            kakao,
+            stay_name=st.session_state.stay_name,
+        )
+    elif selected_view == "🗺️ 전체 지도":
         st.markdown("### 🗺️ 전체 일정 지도  *(일차별 색상 구분)*")
         st.caption("마커 위치: 📊 CSV 좌표 데이터  ·  지도 렌더링: Folium + 카카오 연동")
         render_full_map(itin, st.session_state.user_lat,
                         st.session_state.user_lng, st.session_state.stay_name)
-
-    # 코스 분석 탭
-    with all_tabs[result_days + 1]:
+    else:
         render_analysis(itin, sel_cats, preferences, result_days, "자동 추천 코스 생성")
 
 
