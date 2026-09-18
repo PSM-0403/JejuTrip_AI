@@ -443,3 +443,48 @@ class RecommendationEngine:
         except Exception:
             pass   # AI 실패해도 기본 reason 유지
         return itinerary
+
+
+# ── AI 코스 브리핑 ────────────────────────────────────────────
+def generate_briefing(itinerary: List[Dict], openai_key: str = "") -> str:
+    """전체 코스를 한눈에 소개하는 한두 문장 요약 생성.
+    실제 선택된 장소 구성에 기반해 작성하도록 지시해 과장/지어내기 방지.
+    OpenAI 미사용 시 카테고리 비중 기반 규칙 문장으로 대체."""
+    places = [
+        (s["slot"]["label"], s["place"])
+        for day in itinerary for s in day.get("slots", [])
+    ]
+    if not places:
+        return ""
+
+    if openai_key and OPENAI_OK:
+        try:
+            client = OpenAI(api_key=openai_key)
+            lines = [
+                f"{day['day']}일차 {s['slot']['label']}: {s['place'].get('name','')} ({s['place'].get('category','')})"
+                for day in itinerary for s in day.get("slots", [])
+            ]
+            prompt = (
+                f"다음은 제주 여행 코스 전체 일정입니다:\n" + "\n".join(lines) + "\n\n"
+                f"이 코스의 전체적인 분위기와 특징을 여행자에게 소개하듯 2문장 이내로 요약해줘. "
+                f"장소 구성(카테고리 비중, 테마)에 근거해서 작성하고, 일정에 없는 내용은 언급하지 마."
+            )
+            res = client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                max_completion_tokens=120,
+            )
+            content = res.choices[0].message.content
+            if content and content.strip():
+                return content.strip()
+        except Exception as e:
+            print(f"[코스 브리핑 오류] {e}")
+
+    # 폴백: 카테고리 비중 기반 규칙 요약 (AI 없이도 항상 뭔가 보여줌)
+    cat_counts: Dict[str, int] = {}
+    for _, p in places:
+        c = p.get("category", "기타")
+        cat_counts[c] = cat_counts.get(c, 0) + 1
+    top_cat = max(cat_counts, key=cat_counts.get)
+    num_days = len(itinerary)
+    return f"이번 {num_days}일 코스는 총 {len(places)}곳 중 '{top_cat}' 비중이 가장 높은 일정입니다."

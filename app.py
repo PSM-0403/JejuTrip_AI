@@ -18,7 +18,7 @@ import json
 from config import PAGE_CONFIG, CATEGORIES, KAKAO_API_KEY, OPENAI_API_KEY
 from data_manager import DataManager
 from kakao_service import KakaoService
-from recommendation_engine import RecommendationEngine
+from recommendation_engine import RecommendationEngine, generate_briefing
 from ui_components import render_day_course, render_full_map, render_analysis
 from chatbot import render_chatbot
 from chroma_retriever import is_chroma_ready, get_similar_places
@@ -47,6 +47,7 @@ def _init():
         user_lat=33.4996213, user_lng=126.5311884,
         stay_name="제주시 (기본 출발지)",
         itinerary=[], chat_open=False,
+        course_briefing="",
     )
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -102,6 +103,10 @@ with st.sidebar:
             st.session_state.user_lng  = float(data.get("user_lng", st.session_state.user_lng))
             st.session_state["trip_dates"] = (today, today + datetime.timedelta(days=loaded_days - 1))
             st.session_state["_last_loaded_file"] = uploaded.name
+            st.session_state.course_briefing = generate_briefing(
+                loaded_itin,
+                st.session_state.openai_key if st.session_state.openai_ok else "",
+            )
             st.success(f"✅ 저장된 코스를 불러왔습니다 ({loaded_days}일 코스)")
             st.rerun()
         except Exception as e:
@@ -272,6 +277,10 @@ if gen_btn and sel_cats:
                 pref_slots=pref_slots,
                 radius_km=radius_km, chroma_boost=chroma_boost,
             )
+        st.session_state.course_briefing = generate_briefing(
+            st.session_state.itinerary,
+            st.session_state.openai_key if st.session_state.openai_ok else "",
+        )
 
     st.success("✅ 추천 코스 생성 완료!")
 
@@ -293,6 +302,7 @@ if st.session_state.itinerary:
     with bc2:
         if st.button("🔄 초기화", use_container_width=True):
             st.session_state.itinerary = []
+            st.session_state.course_briefing = ""
             # 코스가 사라지면 챗봇이 참조하던 대화·후보도 함께 정리 (더 이상 존재하지 않는 장소를 언급하지 않도록)
             st.session_state.chat_msgs = []
             st.session_state._pending_chat = None
@@ -322,6 +332,9 @@ if st.session_state.itinerary:
 if st.session_state.itinerary:
     itin  = st.session_state.itinerary
     kakao = KakaoService(st.session_state.kakao_key) if st.session_state.kakao_ok else None
+
+    if st.session_state.get("course_briefing"):
+        st.info(f"🧭 {st.session_state.course_briefing}")
 
     day_tabs   = [f"📅 {d}일차" for d in range(1, num_days + 1)]
     extra_tabs = ["🗺️ 전체 지도", "📊 코스 생성 분석"]
