@@ -15,7 +15,7 @@
 import random
 import pandas as pd
 from typing import List, Dict, Optional
-from config import TIME_SLOTS, CATEGORIES, OPENAI_MODEL
+from config import TIME_SLOTS, OPENAI_MODEL
 from data_manager import DataManager
 from kakao_service import KakaoService, haversine
 
@@ -343,7 +343,6 @@ class RecommendationEngine:
         # GPT 요약 시도
         if self.ai:
             try:
-                import random
                 sample = random.sample(reviews, min(20, len(reviews)))
                 all_reviews = " / ".join(sample)
                 prompt = (
