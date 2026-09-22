@@ -48,6 +48,16 @@ streamlit run app.py     # http://localhost:8501
 - 카카오 API 키: [카카오 개발자 콘솔](https://developers.kakao.com) → 앱 생성 → REST API 키
 - OpenAI API 키(선택): [OpenAI Platform](https://platform.openai.com/api-keys) — 없어도 CSV 기반 추천은 동작
 
+## 테스트
+
+```bash
+pytest
+```
+
+외부 API(카카오·OpenAI) 호출이나 Streamlit 런타임 없이, 추천 로직의 핵심 부분(반경 필터,
+동선 스코어링, 취향 키워드 추출·부정 표현 처리, 추천 이유 생성)만 순수 함수 단위로 검증합니다.
+`tests/test_core_logic.py` 참고.
+
 ## Streamlit Cloud 배포
 
 GitHub 저장소를 [share.streamlit.io](https://share.streamlit.io)에 연결하고, **Secrets**에 `KAKAO_API_KEY`/`OPENAI_API_KEY`를 등록하면 됩니다. Chroma 벡터 DB(`chroma_jeju_reviews/`)는 이미 레포에 포함되어 있어 별도 빌드 없이 바로 동작합니다.
