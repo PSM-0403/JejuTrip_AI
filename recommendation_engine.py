@@ -313,16 +313,26 @@ class RecommendationEngine:
 
     def _remove_negated_keywords(self, original: str, keywords: List[str]) -> List[str]:
         """키워드가 원문에서 부정·무관심 표현과 짝지어진 경우 제거.
-        예) '카페는 상관없어' → '카페' 제거,  '오션뷰 카페 좋아함' → '카페' 유지"""
+        예) '카페는 상관없어' → '카페' 제거,  '오션뷰 카페 좋아함' → '카페' 유지
+
+        탐색 범위는 "다음 키워드가 시작되기 전까지"로 제한한다. 그렇지 않으면
+        '흑돼지 좋아하는데 카페는 상관없어'처럼 여러 취향이 한 문장에 섞였을 때,
+        뒤쪽 키워드('카페')에 대한 부정 표현이 앞쪽 키워드('흑돼지')의 탐색 범위까지
+        침범해 사용자가 명시적으로 원한다고 한 키워드까지 같이 지워져버린다."""
+        positions = [original.find(kw) for kw in keywords]
         result = []
-        for kw in keywords:
-            idx = original.find(kw)
+        for i, kw in enumerate(keywords):
+            idx = positions[i]
             if idx == -1:
                 # 원문에 없는 경우 (AI가 바꿔 표현) → 부정 확인 불가, 유지
                 result.append(kw)
                 continue
-            # 키워드 직후 20자 윈도우에서 부정·무관심 표현 탐색
-            window = original[idx + len(kw): idx + len(kw) + 20]
+            # 키워드 직후 20자, 단 다음 키워드가 그 전에 시작되면 거기서 탐색을 끊는다
+            window_end = idx + len(kw) + 20
+            for j, other_idx in enumerate(positions):
+                if j != i and idx < other_idx < window_end:
+                    window_end = other_idx
+            window = original[idx + len(kw): window_end]
             negated = any(neg in window for neg in self._NEGATION_MARKERS)
             if negated:
                 print(f"[부정 키워드 제거] '{kw}' → 부정/무관심 표현 감지, 검색 제외")
