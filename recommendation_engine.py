@@ -184,8 +184,12 @@ class RecommendationEngine:
         # 4-1. Chroma 리뷰 유사도 부스트 (취향 입력 시)
         if chroma_boost:
             pool["_score"] += pool["name"].map(chroma_boost).fillna(0)
-        # 5. 거리 패널티 (동선 최적화: 직전 방문 장소 기준 — 이동 동선이 튀지 않도록)
+        # 5. 거리 패널티
+        #    - 직전 방문 장소 기준 (동선이 튀지 않도록)
+        #    - 숙소 기준 (하루 동선이 한쪽으로 계속 이어지며 숙소에서 점점 멀어지는 것 방지.
+        #      마지막 일정에서 숙소로 돌아가는 거리까지 고려한 효율적인 동선을 위함)
         pool["_score"] -= pool["_route_dist"].clip(0, 60) * 0.5
+        pool["_score"] -= pool["_dist"].clip(0, 60) * 0.3
 
         # 상위 5개 중 무작위 1개 (다양성 확보)
         top5 = pool.nlargest(5, "_score")
