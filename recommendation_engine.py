@@ -96,7 +96,7 @@ class RecommendationEngine:
                     slots.append({
                         "slot":        slot,
                         "place":       place,
-                        "reason":      self._reason(place, slot, pref_kw),
+                        "reason":      self._reason(place, slot, pref_kw, chroma_boost),
                         "pos_reviews": [],  # 아래에서 병렬로 채움
                         "neg_reviews": [],
                     })
@@ -196,8 +196,12 @@ class RecommendationEngine:
         return top5.sample(1).iloc[0].to_dict()
 
     # ── 내부: 추천 이유 생성 ────────────────────────────────
-    def _reason(self, place: Dict, slot: Dict, pref_kw: List[str]) -> str:
-        """추천 근거 문장 생성  |  📊 CSV 데이터 기반"""
+    def _reason(self, place: Dict, slot: Dict, pref_kw: List[str],
+               chroma_boost: Optional[Dict] = None) -> str:
+        """추천 근거 문장 생성  |  📊 CSV 데이터 + 실제 스코어링에 반영된 신호 기반
+        (취향 키워드 > 슬롯 기본 키워드 > Chroma 유사도 순으로 가장 관련 높은 매칭 하나만 표시,
+        마지막에 숙소 거리를 항상 덧붙여 동선 정보도 함께 보여줌)"""
+        chroma_boost = chroma_boost or {}
         parts = []
         r = place.get("rating")
         if r and float(r) >= 4.5:
@@ -217,6 +221,23 @@ class RecommendationEngine:
             if not matched:
                 # 취향 키워드가 이 장소에 없음을 명시
                 parts.append(f"⚠️ '{pref_kw[0]}' 데이터 없음")
+        else:
+            # 취향 입력이 없을 때: 슬롯 기본 키워드 매칭 → Chroma 유사도 순으로 다음 관련 신호 표시
+            rv_text = str(place.get("reviews_text", ""))
+            slot_kw_hit = next((w for w in slot.get("kw", []) if w in rv_text), None)
+            if slot_kw_hit:
+                parts.append(f"🏷️ '{slot_kw_hit}' 키워드 매칭")
+            elif place.get("name") in chroma_boost:
+                parts.append("🧠 리뷰 유사도 상위 매칭")
+
+        # 동선 정보: 스코어링에 실제 반영된 숙소 거리를 그대로 노출
+        dist = place.get("_dist")
+        if dist is not None:
+            try:
+                parts.append(f"📍 숙소 {float(dist):.1f}km")
+            except (TypeError, ValueError):
+                pass
+
         if not parts:
             parts.append(f"📍 {slot['label']} 시간대 추천 장소")
         return " · ".join(parts)
