@@ -106,10 +106,6 @@ class RecommendationEngine:
         # (최대 7일 x 6곳 = 42회) 코스 생성이 느려짐 → 병렬로 한 번에 처리
         self._classify_reviews_parallel(itinerary)
 
-        # OpenAI 추천 사유 보강 (일차별 kw_map 사용)
-        if self.ai and any(d.get("pref_kw_map") for d in itinerary):
-            itinerary = self._ai_enrich(itinerary)
-
         return itinerary
 
     # ── 내부: 장소 선택 ─────────────────────────────────────
@@ -450,47 +446,6 @@ class RecommendationEngine:
             if alt in cats:
                 return alt
         return None
-
-    # ── OpenAI 추천 사유 보강 (선택) ─────────────────────────
-    def _ai_enrich(self, itinerary: list) -> list:
-        """OpenAI로 추천 사유 문장을 자연스럽게 보강 (코스 자체는 변경 안 함).
-        일차별 pref_kw_map에서 슬롯 키워드 조회 — 미매칭 장소는 건너뜀."""
-        try:
-            for day_info in itinerary:
-                kw_map = day_info.get("pref_kw_map", {})
-                for s in day_info["slots"][:2]:   # 과금 방지: 일차별 2개만
-                    p = s["place"]
-                    pref_kw = kw_map.get(s["slot"].get("key", ""), [])
-
-                    place_text = (
-                        str(p.get("keywords", "")) + " " +
-                        str(p.get("reviews_text", "")) + " " +
-                        str(p.get("name", ""))
-                    ).lower()
-
-                    # 해당 슬롯의 취향 키워드가 장소 데이터에 있는지 확인
-                    if pref_kw and not any(w.lower() in place_text for w in pref_kw):
-                        continue  # 매칭 안 된 장소는 AI 보강 건너뜀
-
-                    # keywords 컬럼 없는 CSV → reviews_text 앞부분을 참고 데이터로 활용
-                    actual_ref = (p.get("keywords") or p.get("reviews_text", ""))[:150]
-                    prompt = (
-                        f"제주 여행 추천 앱. 추천 장소: {p.get('name')} ({p.get('category')}).\n"
-                        f"이 장소의 실제 리뷰/특징: {actual_ref}\n"
-                        f"규칙: 위 내용에 없는 정보는 절대 언급하지 말 것.\n"
-                        f"이 장소의 특징을 한 문장(20자 내)으로만 설명해줘."
-                    )
-                    res = self.ai.chat.completions.create(
-                        model=OPENAI_MODEL,
-                        messages=[{"role": "user", "content": prompt}],
-                        max_completion_tokens=60,
-                    )
-                    ai_reason = res.choices[0].message.content.strip()
-                    s["reason"] = f"🤖 {ai_reason}"
-        except Exception:
-            pass   # AI 실패해도 기본 reason 유지
-        return itinerary
-
 
 # ── AI 코스 브리핑 ────────────────────────────────────────────
 def generate_briefing(itinerary: List[Dict], openai_key: str = "") -> str:
