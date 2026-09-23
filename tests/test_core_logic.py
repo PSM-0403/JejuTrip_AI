@@ -87,14 +87,11 @@ def test_category_normalization_falls_back_to_etc(dm):
     assert dm._norm_cat("전혀 모르는 카테고리") == "기타"
 
 
-# ── RecommendationEngine._pick: 숙소 기준 반경 필터 ──────────
+# ── RecommendationEngine._pick_candidates: 숙소 기준 반경 필터 ─
 
-def test_pick_respects_radius_filter_even_when_farther_place_scores_higher(engine):
-    """반경 필터 회귀 테스트.
-    '숙소 기준 반경 설정이 실제로 지켜지는지 의심스럽다'는 피드백을 조사하는 과정에서,
-    반경 안이어도 하루 동선이 누적되며 숙소에서 점점 멀어질 수 있는 별개의 스코어링 문제를
-    찾아 수정했다(숙소 거리 페널티 추가). 이 테스트는 그와 별개로 "반경 밖 장소는 평점이
-    아무리 높아도 절대 선택되지 않는다"는 하드 컷오프 자체를 고정해 앞으로도 깨지지 않게 한다."""
+def test_pick_candidates_respects_radius_filter_even_when_farther_place_scores_higher(engine):
+    """반경 필터 회귀 테스트. "반경 밖 장소는 평점이 아무리 높아도 후보에조차
+    들어가면 안 된다"는 하드 컷오프를 고정해 앞으로도 깨지지 않게 한다."""
     ulat, ulng = 33.5, 126.5
     near = {  # 숙소에서 위도 0.01도(~1.1km) — 반경 5km 이내
         "name": "근처카페", "lat": ulat + 0.01, "lng": ulng, "category": "카페",
@@ -106,10 +103,43 @@ def test_pick_respects_radius_filter_even_when_farther_place_scores_higher(engin
     }
     df = pd.DataFrame([near, far])
 
-    picked = engine._pick(df, "카페", [], ulat, ulng, used=set(), radius_km=5)
+    candidates = engine._pick_candidates(df, "카페", [], ulat, ulng, used=set(), radius_km=5)
+    names = [c["name"] for c in candidates]
 
-    assert picked is not None
-    assert picked["name"] == "근처카페"
+    assert "근처카페" in names
+    assert "먼카페" not in names, (
+        "반경 5km 밖에 있는 '먼카페'가 평점이 훨씬 높다는 이유로 후보에 포함되면 안 된다"
+    )
+
+
+# ── RecommendationEngine._optimize_day_route: 동선 최적화 ────
+
+def test_optimize_day_route_fills_all_slots_without_duplicate_places(engine):
+    """동선 최적화 회귀 테스트. 슬롯별로 그때그때 가장 가까운 곳만 그리디하게 고르면
+    카테고리 제약 때문에 지그재그(교차) 동선이 나올 수 있었던 문제를 개선하기 위해,
+    슬롯 순서(시간대)는 고정한 채 숙소 출발→...→숙소 복귀 총 이동거리가 최소가 되는
+    조합을 완전탐색으로 찾도록 바꿨다. 두 슬롯의 후보 목록이 겹칠 때도 같은 장소가
+    중복 배정되지 않고 두 슬롯 모두 채워지는지 확인한다."""
+    ulat, ulng = 33.5, 126.5
+    slot_a = {"key": "a", "label": "A", "kw": []}
+    slot_b = {"key": "b", "label": "B", "kw": []}
+
+    east = {"name": "동쪽", "lat": ulat, "lng": ulng + 0.1, "category": "기타",
+            "rating": 4.0, "total_cnt": 0, "reviews_text": ""}
+    west = {"name": "서쪽", "lat": ulat, "lng": ulng - 0.1, "category": "기타",
+            "rating": 4.0, "total_cnt": 0, "reviews_text": ""}
+
+    # 두 슬롯 모두 같은 후보 목록(동쪽/서쪽)을 공유하는 상황
+    slot_candidates = [
+        (slot_a, [], [east, west]),
+        (slot_b, [], [east, west]),
+    ]
+
+    chosen = engine._optimize_day_route(slot_candidates, ulat, ulng)
+    chosen_names = [c["name"] for _, _, c in chosen]
+
+    assert len(chosen_names) == 2          # 두 슬롯 모두 채워져야 한다
+    assert len(set(chosen_names)) == 2     # 같은 장소가 중복 배정되면 안 된다
 
 
 # ── RecommendationEngine: 취향 키워드 추출 (부정 표현 제거) ──

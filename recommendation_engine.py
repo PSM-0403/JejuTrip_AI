@@ -4,12 +4,16 @@
 # 역할: CSV 데이터 기반 자동 추천 로직
 #   - 시간대별 슬롯에 맞는 장소 자동 배치
 #
-# 점수 계산 기준 (📊 CSV 데이터):
-#   - 평점(rating) * 10
-#   - 리뷰 수(total_cnt) / 10 (최대 20점)
-#   - 슬롯 키워드 매칭 +5점/개
-#   - 사용자 선호 키워드 매칭 +10점/개 (reviews_text +3점)
-#   - 거리 패널티 -0.5점/km
+# 추천은 두 단계로 이루어진다:
+#   1. 품질 점수 (📊 CSV 데이터, _pick_candidates)
+#      - 평점(rating) * 10
+#      - 리뷰 수(total_cnt) / 10 (최대 20점)
+#      - 슬롯 키워드 매칭 +5점/개
+#      - 사용자 선호 키워드 매칭 +20~50점/개
+#      → 슬롯별 상위 5개 후보까지만 남김
+#   2. 동선 최적화 (_optimize_day_route)
+#      - 슬롯 순서(시간대)는 고정한 채, 숙소 출발→...→숙소 복귀 총 이동거리가
+#        최소가 되는 후보 조합을 완전탐색으로 선택 (슬롯별 그리디 선택이 아님)
 # ============================================================
 
 import random
@@ -66,8 +70,8 @@ class RecommendationEngine:
                 if text and text.strip()
             }
 
-            slots = []
-            cur_lat, cur_lng = ulat, ulng  # 동선 최적화: 하루의 현재 위치 (숙소에서 출발)
+            # 1단계: 슬롯별로 후보를 여러 개(최대 5개) 모아둔다 (아직 확정하지 않음)
+            slot_candidates = []  # [(slot, pref_kw, [candidate, ...]), ...]
             for slot in TIME_SLOTS:
                 slot_cat = slot["cat"]
 
@@ -88,18 +92,25 @@ class RecommendationEngine:
                 # 이 일차·슬롯에 입력된 취향 키워드 (없으면 빈 리스트 → 기본 추천)
                 pref_kw = kw_map.get(slot["key"], [])
 
-                place = self._pick(df, pick_cat, slot["kw"], ulat, ulng, used, pref_kw, radius_km, chroma_boost,
-                                   ref_lat=cur_lat, ref_lng=cur_lng)
-                if place:
-                    used.add(place["name"])
-                    cur_lat, cur_lng = float(place["lat"]), float(place["lng"])  # 다음 슬롯은 이 장소 기준으로 거리 계산
-                    slots.append({
-                        "slot":        slot,
-                        "place":       place,
-                        "reason":      self._reason(place, slot, pref_kw, chroma_boost),
-                        "pos_reviews": [],  # 아래에서 병렬로 채움
-                        "neg_reviews": [],
-                    })
+                candidates = self._pick_candidates(df, pick_cat, slot["kw"], ulat, ulng, used,
+                                                   pref_kw, radius_km, chroma_boost)
+                if candidates:
+                    slot_candidates.append((slot, pref_kw, candidates))
+
+            # 2단계: 슬롯 순서(시간대)는 고정한 채, 숙소 출발→...→숙소 복귀 총 이동거리가
+            # 최소가 되는 후보 조합을 찾는다 (진짜 동선 최적화 — 슬롯별 그리디 선택이 아님)
+            chosen = self._optimize_day_route(slot_candidates, ulat, ulng)
+
+            slots = []
+            for slot, pref_kw, place in chosen:
+                used.add(place["name"])
+                slots.append({
+                    "slot":        slot,
+                    "place":       place,
+                    "reason":      self._reason(place, slot, pref_kw, chroma_boost),
+                    "pos_reviews": [],  # 아래에서 병렬로 채움
+                    "neg_reviews": [],
+                })
             itinerary.append({"day": day, "slots": slots, "pref_kw_map": kw_map})
 
         # 장소별 리뷰 긍정/부정 요약: 장소마다 독립적인 GPT 호출이라 순차 실행하면
@@ -108,21 +119,22 @@ class RecommendationEngine:
 
         return itinerary
 
-    # ── 내부: 장소 선택 ─────────────────────────────────────
-    def _pick(self, df: pd.DataFrame, cat,   # cat: str 또는 List[str]
-              kw: list,
-              ulat: float, ulng: float, used: set,
-              pref_kw: Optional[List[str]] = None, radius_km: float = 30,
-              chroma_boost: Optional[Dict] = None,
-              ref_lat: Optional[float] = None, ref_lng: Optional[float] = None) -> Optional[Dict]:
-        """카테고리+키워드+거리+평점 종합 점수로 최적 장소 선택  |  📊 CSV
+    # ── 내부: 슬롯별 후보 장소 목록 ─────────────────────────
+    def _pick_candidates(self, df: pd.DataFrame, cat,   # cat: str 또는 List[str]
+                         kw: list,
+                         ulat: float, ulng: float, used: set,
+                         pref_kw: Optional[List[str]] = None, radius_km: float = 30,
+                         chroma_boost: Optional[Dict] = None, top_k: int = 5) -> List[Dict]:
+        """카테고리+키워드+평점 종합 품질 점수로 상위 top_k 후보를 반환  |  📊 CSV
         cat에 리스트를 넘기면 해당 카테고리들을 통합 풀로 사용 (관광 슬롯 등)
-        ref_lat/ref_lng: 동선 최적화용 기준점 (직전 방문 장소). 생략 시 ulat/ulng(숙소) 사용.
-        radius_km 반경 필터는 항상 숙소(ulat/ulng) 기준으로 유지 — 사이드바 설정과 일관성 유지."""
+        radius_km 반경 필터는 항상 숙소(ulat/ulng) 기준.
+
+        거리(동선) 관련 점수는 여기서 매기지 않는다 — 하루치 슬롯의 후보를 모두 모은 뒤
+        _optimize_day_route()가 "숙소 출발→...→숙소 복귀" 총 이동거리를 최소화하는 조합을
+        따로 찾기 때문에, 여기서는 순수 품질(평점·리뷰·키워드매칭)로만 상위 후보를 추린다."""
         pref_kw = pref_kw or []
         chroma_boost = chroma_boost or {}
-        ref_lat = ulat if ref_lat is None else ref_lat
-        ref_lng = ulng if ref_lng is None else ref_lng
+
         def _cat_filter(d: pd.DataFrame) -> pd.DataFrame:
             if isinstance(cat, list):
                 return d[d["category"].isin(cat)]
@@ -133,7 +145,7 @@ class RecommendationEngine:
         if pool.empty:
             pool = _cat_filter(df).copy()  # used 제한 해제
         if pool.empty:
-            return None
+            return []
 
         pool = pool.copy()
         # 반경 필터링: 숙소 기준 선택한 km 이내 장소만 포함 (사이드바 설정 그대로 유지)
@@ -145,13 +157,8 @@ class RecommendationEngine:
             pool = in_radius.copy()
         # 반경 내 장소가 없으면 필터 없이 전체에서 선택 (fallback)
 
-        # 동선 최적화용 거리: 직전 방문 장소(ref_lat/ref_lng) 기준 — 기본은 숙소와 동일
-        pool["_route_dist"] = pool.apply(
-            lambda r: haversine(ref_lat, ref_lng, float(r["lat"]), float(r["lng"])), axis=1
-        )
-
-        # 4-0. 취향 키워드 하드 필터 — 매칭 장소가 있으면 반드시 그 장소들로만 후보 제한
-        #      (데이터에 없는 음식/특징을 가진 장소를 추천하는 할루시네이션 방지)
+        # 취향 키워드 하드 필터 — 매칭 장소가 있으면 반드시 그 장소들로만 후보 제한
+        # (데이터에 없는 음식/특징을 가진 장소를 추천하는 할루시네이션 방지)
         if pref_kw:
             pref_mask = pd.Series(False, index=pool.index)
             for w in pref_kw:
@@ -180,16 +187,54 @@ class RecommendationEngine:
         # 4-1. Chroma 리뷰 유사도 부스트 (취향 입력 시)
         if chroma_boost:
             pool["_score"] += pool["name"].map(chroma_boost).fillna(0)
-        # 5. 거리 패널티
-        #    - 직전 방문 장소 기준 (동선이 튀지 않도록)
-        #    - 숙소 기준 (하루 동선이 한쪽으로 계속 이어지며 숙소에서 점점 멀어지는 것 방지.
-        #      마지막 일정에서 숙소로 돌아가는 거리까지 고려한 효율적인 동선을 위함)
-        pool["_score"] -= pool["_route_dist"].clip(0, 60) * 0.5
-        pool["_score"] -= pool["_dist"].clip(0, 60) * 0.3
 
-        # 상위 5개 중 무작위 1개 (다양성 확보)
-        top5 = pool.nlargest(5, "_score")
-        return top5.sample(1).iloc[0].to_dict()
+        top_n = pool.nlargest(top_k, "_score")
+        return top_n.to_dict("records")
+
+    # ── 내부: 하루 동선 최적화 ───────────────────────────────
+    def _optimize_day_route(self, slot_candidates: List[tuple],
+                            ulat: float, ulng: float) -> List[tuple]:
+        """슬롯 순서(시간대)는 고정한 채, 각 슬롯의 후보 조합 중
+        "숙소 출발 → 슬롯1 → 슬롯2 → ... → 마지막 슬롯 → 숙소 복귀"의
+        총 이동거리가 최소가 되는 조합을 완전탐색으로 찾는다.
+
+        슬롯 최대 6개 x 슬롯당 후보 최대 5개 = 최대 5^6(=15,625)가지뿐이라
+        완전탐색으로도 충분히 빠르다 (실제로는 카테고리 겹침 등으로 이보다 적음).
+        같은 장소가 하루 안에서 중복 선택되지 않도록 방지하고, 한 슬롯의 후보가
+        모두 이미 다른 슬롯에서 쓰였다면 그 슬롯은 건너뛴다(기존 동작과 동일).
+
+        slot_candidates: [(slot, pref_kw, [candidate dict, ...]), ...]
+        반환: [(slot, pref_kw, chosen place dict), ...] (선택된 슬롯만 포함)
+        """
+        best: Dict[str, Optional[list]] = {"dist": None, "combo": None}
+
+        def dfs(i: int, prev_lat: float, prev_lng: float,
+                used_names: set, acc_dist: float, combo: list):
+            if i == len(slot_candidates):
+                total = acc_dist + haversine(prev_lat, prev_lng, ulat, ulng)  # 숙소 복귀 거리 포함
+                if best["dist"] is None or total < best["dist"]:
+                    best["dist"] = total
+                    best["combo"] = list(combo)
+                return
+
+            slot, pref_kw, candidates = slot_candidates[i]
+            available = [c for c in candidates if c["name"] not in used_names]
+            if not available:
+                # 이 슬롯의 후보가 모두 다른 슬롯에서 이미 쓰임 → 이 슬롯은 건너뛰고 다음으로
+                dfs(i + 1, prev_lat, prev_lng, used_names, acc_dist, combo)
+                return
+
+            for c in available:
+                name = c["name"]
+                d = haversine(prev_lat, prev_lng, float(c["lat"]), float(c["lng"]))
+                used_names.add(name)
+                combo.append((slot, pref_kw, c))
+                dfs(i + 1, float(c["lat"]), float(c["lng"]), used_names, acc_dist + d, combo)
+                combo.pop()
+                used_names.discard(name)
+
+        dfs(0, ulat, ulng, set(), 0.0, [])
+        return best["combo"] or []
 
     # ── 내부: 추천 이유 생성 ────────────────────────────────
     def _reason(self, place: Dict, slot: Dict, pref_kw: List[str],
