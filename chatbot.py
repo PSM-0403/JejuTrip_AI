@@ -163,8 +163,10 @@ def _format_candidates(day: int, slot_key: str, keyword: str, candidates: list) 
 _POS_KW = ["좋아", "맛있", "최고", "추천", "훌륭", "깔끔", "친절", "만족", "완벽", "신선", "맛나", "감동", "좋았", "좋은", "맛집", "대박"]
 _NEG_KW = ["별로", "실망", "나쁘", "최악", "아쉽", "불친절", "비싸", "후회", "형편없", "안 좋", "별점 1", "별점1"]
 
-def _classify_reviews(reviews_text: str, client) -> tuple:
-    """GPT로 리뷰 긍정/부정 요약, 실패 시 키워드 기반 폴백"""
+def _classify_reviews(reviews_text: str, client, place_name: str = "") -> tuple:
+    """GPT로 리뷰 긍정/부정 요약, 실패 시 키워드 기반 폴백.
+    place_name을 프롬프트에 명시해, 크롤링된 리뷰에 다른 가게 얘기가 섞여 있어도
+    GPT가 이 장소와 무관한 내용은 걸러내도록 함 (recommendation_engine.py와 동일한 이유)."""
     import random, re
     reviews = [r.strip() for r in str(reviews_text).split("|") if len(r.strip()) > 10 and r.strip().lower() != "nan"]
     if not reviews:
@@ -172,9 +174,13 @@ def _classify_reviews(reviews_text: str, client) -> tuple:
 
     if client:
         try:
-            sample  = random.sample(reviews, min(20, len(reviews)))
+            sample = random.sample(reviews, min(20, len(reviews)))
+            place_ref = place_name or "이 장소"
             prompt  = (
-                f"다음은 한국어 장소 리뷰들이야:\n{' / '.join(sample)}\n\n"
+                f"장소명: {place_ref}\n"
+                f"다음은 위 장소에 대해 수집된 한국어 리뷰들이야:\n{' / '.join(sample)}\n\n"
+                f"주의: 리뷰 안에 그날 들른 다른 가게·다른 장소 이야기가 섞여 있을 수 있어. "
+                f"'{place_ref}'와 무관한 내용은 절대 포함하지 말고, '{place_ref}'에 대한 내용만 요약해.\n"
                 f"긍정적인 내용 2가지, 부정적인 내용 2가지를 각각 한 문장씩 요약해줘.\n"
                 f"부정적인 내용이 1가지뿐이면 neg 배열에 1개만, 없으면 빈 배열로.\n"
                 f"코드블록 없이 JSON만 반환: {{\"pos\": [\"요약1\", \"요약2\"], \"neg\": [\"요약1\"]}}"
@@ -217,7 +223,9 @@ def _apply_place(day: int, slot_key: str, new_place: dict, client, keyword: str 
         label = _SLOT_LABELS.get(slot_key, slot_key)
         return f"⚠️ {day}일차 코스에 '{label}' 슬롯이 없습니다."
 
-    pos_reviews, neg_reviews = _classify_reviews(new_place.get("reviews_text", ""), client)
+    pos_reviews, neg_reviews = _classify_reviews(
+        new_place.get("reviews_text", ""), client, new_place.get("name", "")
+    )
 
     reason = f"🔄 '{keyword}' 조건으로 변경" if keyword else "🔄 직접 선택으로 변경"
     st.session_state.itinerary[day - 1]["slots"][slot_idx]["place"]       = new_place

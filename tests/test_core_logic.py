@@ -29,6 +29,33 @@ def engine(dm):
     return RecommendationEngine(dm, kakao=None, openai_key="")
 
 
+class _FakeOpenAIClient:
+    """실제 API를 호출하지 않고 마지막 프롬프트만 캡처하는 테스트용 가짜 클라이언트."""
+
+    def __init__(self, response_content: str):
+        self.last_prompt = None
+        self._response_content = response_content
+        self.chat = self
+        self.completions = self
+
+    def create(self, model, messages, **kwargs):
+        self.last_prompt = messages[0]["content"]
+
+        class _Msg:
+            def __init__(self, content):
+                self.content = content
+
+        class _Choice:
+            def __init__(self, content):
+                self.message = _Msg(content)
+
+        class _Response:
+            def __init__(self, content):
+                self.choices = [_Choice(content)]
+
+        return _Response(self._response_content)
+
+
 # ── haversine (직선거리 계산) ────────────────────────────────
 
 def test_haversine_same_point_is_zero():
@@ -129,3 +156,24 @@ def test_reason_flags_when_preference_keyword_not_found_in_data(engine):
 
     assert "⚠️" in reason
     assert "오션뷰" in reason
+
+
+# ── RecommendationEngine._classify_reviews: 리뷰 요약 프롬프트 ─
+
+def test_classify_reviews_prompt_includes_place_name(dm):
+    """회귀 테스트. 크롤링된 리뷰(특히 블로그 후기)는 한 글 안에 그날 들른 다른 가게
+    이야기가 섞여 있는 경우가 있다(예: 카페 리뷰인데 '짬뽕집 탕수육은 맛있었다'는
+    무관한 내용이 포함). 장소명을 프롬프트에 안 넣으면 GPT가 이걸 걸러낼 방법이
+    없으므로, 반드시 프롬프트에 장소명이 포함돼야 한다.
+    실제 API를 부르지 않고 가짜 클라이언트로 프롬프트 내용만 검사한다."""
+    fake = _FakeOpenAIClient('{"pos": ["좋음"], "neg": []}')
+    engine = RecommendationEngine(dm, kakao=None, openai_key="")
+    engine.ai = fake  # 실제 네트워크 호출 없이 프롬프트만 캡처
+
+    engine._classify_reviews(
+        "리뷰 하나 입니다 글자수 넘게 채움 | 리뷰 둘 입니다 글자수 넘게 채움",
+        place_name="나모나모베이커리",
+    )
+
+    assert fake.last_prompt is not None
+    assert "나모나모베이커리" in fake.last_prompt

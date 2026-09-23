@@ -366,8 +366,14 @@ class RecommendationEngine:
     _POS_KW = ["좋아", "맛있", "최고", "추천", "훌륭", "깔끔", "친절", "만족", "완벽", "신선", "맛나", "감동", "좋았", "좋은", "맛집", "대박"]
     _NEG_KW = ["별로", "실망", "나쁘", "최악", "아쉽", "불친절", "비싸", "후회", "형편없", "안 좋", "별점 1", "별점1"]
 
-    def _classify_reviews(self, reviews_text: str):
-        """GPT로 리뷰 전체를 읽고 긍정/부정 요약문 생성. 실패 시 키워드 기반 폴백."""
+    def _classify_reviews(self, reviews_text: str, place_name: str = ""):
+        """GPT로 리뷰 전체를 읽고 긍정/부정 요약문 생성. 실패 시 키워드 기반 폴백.
+
+        place_name을 프롬프트에 명시하는 이유: 크롤링된 리뷰(특히 블로그 후기)는
+        한 리뷰 글 안에 그날 들른 다른 가게·다른 장소 이야기가 섞여 있는 경우가 있다
+        (예: 카페 리뷰인데 "짬뽕집 탕수육은 맛있었다"는 무관한 내용이 포함).
+        장소명을 모른 채 리뷰 텍스트만 던지면 GPT가 그런 무관한 내용까지 그대로
+        요약에 포함시키므로, 반드시 이 장소에 대한 내용만 추리도록 명시한다."""
         reviews = [
             r.strip() for r in str(reviews_text).split("|")
             if len(r.strip()) > 10 and r.strip().lower() != "nan"
@@ -380,10 +386,16 @@ class RecommendationEngine:
             try:
                 sample = random.sample(reviews, min(20, len(reviews)))
                 all_reviews = " / ".join(sample)
+                place_ref = place_name or "이 장소"
                 prompt = (
-                    f"다음은 한국어 장소 리뷰들이야:\n{all_reviews}\n\n"
-                    f"이 리뷰들을 읽고 긍정적인 내용 2가지, 부정적인 내용 2가지를 각각 한 문장씩 요약해줘.\n"
-                    f"부정적인 내용이 1가지뿐이면 neg 배열에 1개만, 없으면 빈 배열로.\n"
+                    f"장소명: {place_ref}\n"
+                    f"다음은 위 장소에 대해 수집된 한국어 리뷰들이야 (' / '로 구분됨):\n{all_reviews}\n\n"
+                    f"주의: 크롤링 특성상 일부 리뷰는 '{place_ref}'와 전혀 무관한 다른 가게 방문기일 수 있어. "
+                    f"그런 리뷰는 통째로 완전히 무시하고, '다른 가게 이야기가 있었다' 같은 언급조차 "
+                    f"요약에 남기지 마. 오직 '{place_ref}' 자체에 대해 쓰인 문장만 사용해.\n"
+                    f"긍정적인 내용과 부정적인 내용을 각각 최대 2가지까지 한 문장씩 요약해줘. "
+                    f"'{place_ref}'에 대한 내용이 부족하면 절대 억지로 채우지 말고 있는 만큼만 반환하고, "
+                    f"전혀 없으면 반드시 빈 배열로 반환해.\n"
                     f"코드블록 없이 JSON만 반환: {{\"pos\": [\"요약1\", \"요약2\"], \"neg\": [\"요약1\", \"요약2\"]}}"
                 )
                 res = self.ai.chat.completions.create(
@@ -422,7 +434,11 @@ class RecommendationEngine:
             return
         with ThreadPoolExecutor(max_workers=min(10, len(tasks))) as pool:
             future_to_slot = {
-                pool.submit(self._classify_reviews, s["place"].get("reviews_text", "")): s
+                pool.submit(
+                    self._classify_reviews,
+                    s["place"].get("reviews_text", ""),
+                    s["place"].get("name", ""),
+                ): s
                 for s in tasks
             }
             for future, s in future_to_slot.items():
