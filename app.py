@@ -328,58 +328,65 @@ if st.session_state.itinerary:
             mime="application/json",
         )
 
-# ── 결과 탭 ─────────────────────────────────────────────────
-if st.session_state.itinerary:
-    itin  = st.session_state.itinerary
-    kakao = KakaoService(st.session_state.kakao_key) if st.session_state.kakao_ok else None
-
-    if st.session_state.get("course_briefing"):
-        st.info(f"🧭 {st.session_state.course_briefing}")
-
-    # 일차 수는 사이드바의 num_days가 아니라 실제 itin 길이 기준으로 맞춘다.
-    # (코스를 불러온 뒤 재생성 없이 여행 기간만 바꾸면 num_days와 itin 길이가 어긋나는 문제 방지)
-    result_days  = len(itin)
-    day_labels   = [f"📅 {d}일차" for d in range(1, result_days + 1)]
-    extra_labels = ["🗺️ 전체 지도", "📊 코스 생성 분석"]
-    view_labels  = day_labels + extra_labels
-
-    # st.tabs()는 선택 안 한 탭까지 매번 전부 실행해서, 일차마다 걸리는 카카오 API 호출이
-    # 화면에 안 보이는 탭까지 다 같이 돌며 느려지는 원인이었음.
-    # radio로 바꿔 선택된 화면 하나만 렌더링(=API 호출도 그 하루치만 발생)하도록 개선.
-    if st.session_state.get("result_view") not in view_labels:
-        st.session_state.result_view = view_labels[0]
-    selected_view = st.radio(
-        "결과 보기", view_labels, horizontal=True,
-        label_visibility="collapsed", key="result_view",
-    )
-    st.divider()
-
-    if selected_view in day_labels:
-        day_info = itin[day_labels.index(selected_view)]
-        st.markdown(f"## 📅 {day_info['day']}일차 여행 코스")
-        st.caption("📊 장소 정보: CSV 데이터  ·  🗺️ 경로·지도: 카카오 API")
-        render_day_course(
-            day_info,
-            st.session_state.user_lat,
-            st.session_state.user_lng,
-            kakao,
-            stay_name=st.session_state.stay_name,
-        )
-    elif selected_view == "🗺️ 전체 지도":
-        st.markdown("### 🗺️ 전체 일정 지도  *(일차별 색상 구분)*")
-        st.caption("마커 위치: 📊 CSV 좌표 데이터  ·  지도 렌더링: Folium + 카카오 연동")
-        render_full_map(itin, st.session_state.user_lat,
-                        st.session_state.user_lng, st.session_state.stay_name)
-    else:
-        render_analysis(itin, sel_cats, preferences, result_days, "자동 추천 코스 생성")
-
-
-# ── AI 챗봇 패널 (하단 표시) ────────────────────────────────
+# ── 결과 + 챗봇 (챗봇을 열면 결과 화면 오른쪽에 나란히 배치) ──
+# 챗봇이 맨 아래에만 있으면 코스를 보면서 수정하기 불편하다는 피드백 반영.
+# Streamlit은 리액트처럼 슬라이드 애니메이션 패널을 기본 지원하지 않아서,
+# 대신 켜고 끌 수 있는 2단 컬럼으로 "코스 보면서 챗봇도 같이 보기"를 구현.
 if st.session_state.chat_open:
-    st.divider()
-    st.markdown("### 💬 AI 여행 챗봇  *(OpenAI API 사용)*")
-    st.caption(
-        "현재 추천 코스 관련 질문이나 제주 여행 정보를 자유롭게 질문하세요. "
-        "📊 CSV 기반 추천 코스 컨텍스트를 AI가 참고합니다."
-    )
-    render_chatbot(st.session_state.itinerary, st.session_state.openai_key, dm, radius_km=radius_km)
+    main_col, chat_col = st.columns([2, 1], gap="large")
+else:
+    main_col, chat_col = st.container(), None
+
+with main_col:
+    if st.session_state.itinerary:
+        itin  = st.session_state.itinerary
+        kakao = KakaoService(st.session_state.kakao_key) if st.session_state.kakao_ok else None
+
+        if st.session_state.get("course_briefing"):
+            st.info(f"🧭 {st.session_state.course_briefing}")
+
+        # 일차 수는 사이드바의 num_days가 아니라 실제 itin 길이 기준으로 맞춘다.
+        # (코스를 불러온 뒤 재생성 없이 여행 기간만 바꾸면 num_days와 itin 길이가 어긋나는 문제 방지)
+        result_days  = len(itin)
+        day_labels   = [f"📅 {d}일차" for d in range(1, result_days + 1)]
+        extra_labels = ["🗺️ 전체 지도", "📊 코스 생성 분석"]
+        view_labels  = day_labels + extra_labels
+
+        # st.tabs()는 선택 안 한 탭까지 매번 전부 실행해서, 일차마다 걸리는 카카오 API 호출이
+        # 화면에 안 보이는 탭까지 다 같이 돌며 느려지는 원인이었음.
+        # radio로 바꿔 선택된 화면 하나만 렌더링(=API 호출도 그 하루치만 발생)하도록 개선.
+        if st.session_state.get("result_view") not in view_labels:
+            st.session_state.result_view = view_labels[0]
+        selected_view = st.radio(
+            "결과 보기", view_labels, horizontal=True,
+            label_visibility="collapsed", key="result_view",
+        )
+        st.divider()
+
+        if selected_view in day_labels:
+            day_info = itin[day_labels.index(selected_view)]
+            st.markdown(f"## 📅 {day_info['day']}일차 여행 코스")
+            st.caption("📊 장소 정보: CSV 데이터  ·  🗺️ 경로·지도: 카카오 API")
+            render_day_course(
+                day_info,
+                st.session_state.user_lat,
+                st.session_state.user_lng,
+                kakao,
+                stay_name=st.session_state.stay_name,
+            )
+        elif selected_view == "🗺️ 전체 지도":
+            st.markdown("### 🗺️ 전체 일정 지도  *(일차별 색상 구분)*")
+            st.caption("마커 위치: 📊 CSV 좌표 데이터  ·  지도 렌더링: Folium + 카카오 연동")
+            render_full_map(itin, st.session_state.user_lat,
+                            st.session_state.user_lng, st.session_state.stay_name)
+        else:
+            render_analysis(itin, sel_cats, preferences, result_days, "자동 추천 코스 생성")
+
+if chat_col is not None:
+    with chat_col:
+        st.markdown("### 💬 AI 챗봇")
+        st.caption(
+            "추천 코스 관련 질문이나 제주 여행 정보를 자유롭게 질문하세요. "
+            "📊 CSV 기반 추천 코스 컨텍스트를 AI가 참고합니다."
+        )
+        render_chatbot(st.session_state.itinerary, st.session_state.openai_key, dm, radius_km=radius_km)
