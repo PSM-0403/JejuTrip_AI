@@ -124,14 +124,20 @@ class RecommendationEngine:
                          kw: list,
                          ulat: float, ulng: float, used: set,
                          pref_kw: Optional[List[str]] = None, radius_km: float = 30,
-                         chroma_boost: Optional[Dict] = None, top_k: int = 5) -> List[Dict]:
-        """카테고리+키워드+평점 종합 품질 점수로 상위 top_k 후보를 반환  |  📊 CSV
+                         chroma_boost: Optional[Dict] = None, top_k: int = 5,
+                         pool_size: int = 10) -> List[Dict]:
+        """카테고리+키워드+평점 종합 품질 점수로 후보를 추려 _optimize_day_route에 넘긴다  |  📊 CSV
         cat에 리스트를 넘기면 해당 카테고리들을 통합 풀로 사용 (관광 슬롯 등)
         radius_km 반경 필터는 항상 숙소(ulat/ulng) 기준.
 
         거리(동선) 관련 점수는 여기서 매기지 않는다 — 하루치 슬롯의 후보를 모두 모은 뒤
         _optimize_day_route()가 "숙소 출발→...→숙소 복귀" 총 이동거리를 최소화하는 조합을
-        따로 찾기 때문에, 여기서는 순수 품질(평점·리뷰·키워드매칭)로만 상위 후보를 추린다."""
+        따로 찾기 때문에, 여기서는 순수 품질(평점·리뷰·키워드매칭)로만 후보를 추린다.
+
+        상위 pool_size(기본 10)개 중 top_k(기본 5)개를 무작위로 뽑아 반환한다 —
+        완전탐색(DP)이 결정론적이라, 이 단계에서 무작위성을 넣지 않으면 같은 조건에선
+        항상 똑같은 코스만 나온다. DP는 여기서 뽑힌 후보들 안에서는 여전히 최적 동선을
+        찾으므로, "괜찮은 후보들 중 매번 다른 조합 + 그 안에서 최적 동선"이 유지된다."""
         pref_kw = pref_kw or []
         chroma_boost = chroma_boost or {}
 
@@ -188,8 +194,10 @@ class RecommendationEngine:
         if chroma_boost:
             pool["_score"] += pool["name"].map(chroma_boost).fillna(0)
 
-        top_n = pool.nlargest(top_k, "_score")
-        return top_n.to_dict("records")
+        top_n = pool.nlargest(min(pool_size, len(pool)), "_score")
+        if len(top_n) <= top_k:
+            return top_n.to_dict("records")
+        return top_n.sample(top_k).to_dict("records")
 
     # ── 내부: 하루 동선 최적화 ───────────────────────────────
     def _optimize_day_route(self, slot_candidates: List[tuple],

@@ -207,3 +207,23 @@ def test_classify_reviews_prompt_includes_place_name(dm):
 
     assert fake.last_prompt is not None
     assert "나모나모베이커리" in fake.last_prompt
+
+
+# ── RecommendationEngine._pick_candidates: 다양성(무작위성) ──
+
+def test_pick_candidates_returns_varying_results_across_calls(engine, dm):
+    """회귀 테스트. _optimize_day_route가 결정론적(완전탐색)으로 바뀌면서,
+    후보 자체가 매번 고정이면 같은 조건에서 항상 같은 코스만 나오게 된다
+    (다양성 확보 기능 상실). _pick_candidates가 상위 후보 중 일부를
+    무작위로 뽑아 반환해 다양성을 유지하는지 확인한다."""
+    df = dm.filter_by_cats(["카페"])
+    ulat, ulng = 33.4996213, 126.5311884
+
+    results = [
+        tuple(sorted(c["name"] for c in engine._pick_candidates(
+            df, "카페", [], ulat, ulng, used=set(), radius_km=60,
+        )))
+        for _ in range(10)
+    ]
+
+    assert len(set(results)) > 1, "10번을 돌려도 후보 조합이 항상 똑같으면 다양성이 사라진 것"
