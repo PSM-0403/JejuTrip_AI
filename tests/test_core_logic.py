@@ -227,3 +227,150 @@ def test_pick_candidates_returns_varying_results_across_calls(engine, dm):
     ]
 
     assert len(set(results)) > 1, "10번을 돌려도 후보 조합이 항상 똑같으면 다양성이 사라진 것"
+
+
+# ── text_match / _pick_candidates: 취향 키워드 매칭 ──────────
+
+def test_keyword_view_does_not_match_the_word_review():
+    """회귀 테스트. "뷰"는 "리뷰"라는 단어에도 들어 있어서, 리뷰 본문에 "리뷰"만 있어도
+    "뷰 좋은 카페"에 매칭되던 문제(카페 '뷰' 후보 141곳 중 31곳)를 고정한다."""
+    from text_match import text_contains
+
+    assert not text_contains("리뷰 이벤트 참여했어요", "뷰")
+    assert text_contains("오션뷰가 정말 좋아요", "뷰")
+
+
+def test_pick_candidates_ranks_place_with_more_keyword_mentions_first(engine):
+    """취향 키워드 점수는 "한 번이라도 나왔는지"가 아니라 "몇 %의 리뷰에 나왔는지"로 준다.
+    평점·리뷰 수가 같으면, 키워드를 더 많은 리뷰에서 언급한 곳이 먼저 와야 한다."""
+    ulat, ulng = 33.5, 126.5
+    base = {"lat": ulat + 0.01, "lng": ulng, "category": "카페", "rating": 4.5, "total_cnt": 100}
+    few = dict(base, name="한번언급카페",
+               reviews_text=" | ".join(["조용해요"] + ["맛있어요"] * 19))
+    many = dict(base, name="자주언급카페",
+                reviews_text=" | ".join(["조용해요"] * 8 + ["맛있어요"] * 12))
+    df = pd.DataFrame([few, many])
+
+    top = engine._pick_candidates(df, "카페", [], ulat, ulng, used=set(),
+                                  pref_kw=["조용"], radius_km=5, top_k=1, pool_size=1)
+
+    assert top[0]["name"] == "자주언급카페"
+
+
+def test_pick_candidates_hard_filter_ignores_review_word_for_view(engine):
+    """'뷰'를 취향으로 넣었을 때 '리뷰'라는 단어만 있는 장소는 후보에서 빠져야 한다."""
+    ulat, ulng = 33.5, 126.5
+    base = {"lat": ulat + 0.01, "lng": ulng, "category": "카페", "rating": 4.5, "total_cnt": 100}
+    review_only = dict(base, name="쿠키주는카페", reviews_text="리뷰 쓰면 쿠키 줘요")
+    real_view = dict(base, name="바다보이는카페", reviews_text="뷰가 정말 예뻐요")
+    df = pd.DataFrame([review_only, real_view])
+
+    names = [c["name"] for c in engine._pick_candidates(
+        df, "카페", [], ulat, ulng, used=set(), pref_kw=["뷰"], radius_km=5)]
+
+    assert names == ["바다보이는카페"]
+
+
+def test_single_char_keyword_false_matches_are_ignored():
+    """한 글자 키워드는 다른 단어에 자주 걸린다. 리뷰에서 많이 나온 오탐("주차", "후회")은 거른다."""
+    from text_match import text_contains
+
+    assert not text_contains("주차장이 넓어요", "차")
+    assert text_contains("차가 향긋해요", "차")
+    assert not text_contains("후회 없는 선택", "회")
+    assert text_contains("물회가 시원해요", "회")
+
+
+def test_ai_keyword_extraction_keeps_single_char_keyword(dm):
+    """회귀 테스트. GPT 추출 결과에서 두 글자 미만을 버려서 "뷰 좋은 카페"가 ['카페']만 남고
+    '뷰' 취향이 무시되던 문제를 고정한다."""
+    engine = RecommendationEngine(dm, kakao=None, openai_key="")
+    engine.ai = _FakeOpenAIClient("뷰,카페")
+
+    assert "뷰" in engine._extract_pref_keywords("뷰 좋은 카페")
+
+
+# ── chatbot: 챗 키워드로 후보 찾기 ────────────────────────────
+
+def _chat_pool(rows):
+    df = pd.DataFrame(rows)
+    df["_dist"] = 1.0
+    return df
+
+
+def test_chat_ranking_prefers_place_matching_all_keywords():
+    """"해산물이 들어간 국수집"처럼 키워드가 여러 개면, 모두 언급된 곳만 남겨야 한다."""
+    from chatbot import _rank_by_keywords
+
+    base = {"rating": 4.5, "total_cnt": 100}
+    pool = _chat_pool([
+        dict(base, name="국수만집", reviews_text="국수가 맛있어요"),
+        dict(base, name="해산물만집", reviews_text="해산물이 신선해요"),
+        dict(base, name="둘다집", reviews_text="해산물 듬뿍 들어간 국수"),
+    ])
+
+    ranked = _rank_by_keywords(pool, ["해산물", "국수"])
+
+    assert list(ranked["name"]) == ["둘다집"]
+
+
+def test_chat_ranking_falls_back_to_partial_match_with_more_hits_first():
+    """모두 언급된 곳이 없으면 하나라도 맞는 곳에서 고르고, 전혀 안 맞는 곳은 뺀다."""
+    from chatbot import _rank_by_keywords
+
+    base = {"rating": 4.5, "total_cnt": 100}
+    pool = _chat_pool([
+        dict(base, name="국수집", reviews_text="국수가 맛있어요"),
+        dict(base, name="카페", reviews_text="커피가 맛있어요"),
+    ])
+
+    ranked = _rank_by_keywords(pool, ["해산물", "국수"])
+
+    assert list(ranked["name"]) == ["국수집"]
+
+
+def test_split_keywords_handles_space_and_comma():
+    from text_match import split_keywords
+
+    assert split_keywords("해산물 국수") == ["해산물", "국수"]
+    assert split_keywords("해산물,국수") == ["해산물", "국수"]
+    assert split_keywords("") == []
+
+
+def test_generic_words_are_dropped_from_preference_keywords(dm):
+    """'카페' 같은 일반 단어는 거의 모든 카페에 걸려서, 같이 뽑힌 '뷰'가 후보 거르기에
+    반영되지 않았다. 시간대가 이미 정해 주는 단어는 키워드에서 뺀다."""
+    engine = RecommendationEngine(dm, kakao=None, openai_key="")
+    engine.ai = _FakeOpenAIClient("카페,뷰")
+
+    assert engine._extract_pref_keywords("뷰 좋은 카페") == ["뷰"]
+
+
+def test_pick_candidates_keeps_only_places_matching_all_preference_keywords(engine):
+    """코스 생성도 챗봇과 같은 기준: "흑돼지 구이"면 둘 다 언급된 곳만 남긴다.
+    흑돼지만 언급된 곳은 평점이 더 높아도 후보에 들어가면 안 된다."""
+    ulat, ulng = 33.5, 126.5
+    base = {"lat": ulat + 0.01, "lng": ulng, "category": "맛집", "total_cnt": 100}
+    stew = dict(base, name="전골집", rating=5.0, reviews_text="흑돼지 김치전골이 맛있어요")
+    grill = dict(base, name="구이집", rating=4.0, reviews_text="흑돼지 구이가 최고예요")
+    df = pd.DataFrame([stew, grill])
+
+    names = [c["name"] for c in engine._pick_candidates(
+        df, "맛집", [], ulat, ulng, used=set(), pref_kw=["흑돼지", "구이"], radius_km=5)]
+
+    assert names == ["구이집"]
+
+
+def test_keywords_in_separate_reviews_rank_below_keywords_in_same_review():
+    """'흑돼지'와 '구이'가 서로 다른 리뷰에 따로 있는 생선구이집보다,
+    같은 리뷰에 함께 나온 흑돼지구이집이 후보로 남아야 한다."""
+    from text_match import filter_by_keywords
+
+    pool = pd.DataFrame([
+        {"name": "생선구이집", "reviews_text": "흑돼지 먹고 다음날 왔어요 | 고등어구이가 최고"},
+        {"name": "돼지집", "reviews_text": "흑돼지 구이가 두툼해요 | 친절해요"},
+    ])
+
+    kept, _ = filter_by_keywords(pool, ["흑돼지", "구이"])
+
+    assert list(kept["name"]) == ["돼지집"]

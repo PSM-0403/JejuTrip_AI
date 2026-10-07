@@ -9,7 +9,7 @@
 #      - 평점(rating) * 10
 #      - 리뷰 수(total_cnt) / 10 (최대 20점)
 #      - 슬롯 키워드 매칭 +5점/개
-#      - 사용자 선호 키워드 매칭 +20~50점/개
+#      - 사용자 선호 키워드: 장소명에 있으면 +50점, 리뷰는 언급 비율 × 20점
 #      → 슬롯별 상위 5개 후보까지만 남김
 #   2. 동선 최적화 (_optimize_day_route)
 #      - 슬롯 순서(시간대)는 고정한 채, 숙소 출발→...→숙소 복귀 총 이동거리가
@@ -23,6 +23,7 @@ from typing import List, Dict, Optional
 from config import TIME_SLOTS, OPENAI_MODEL
 from data_manager import DataManager
 from kakao_service import KakaoService, haversine
+from text_match import drop_generic, filter_by_keywords, review_contains, review_hit_ratio, text_contains, together_ratio
 
 try:
     from openai import OpenAI
@@ -165,14 +166,11 @@ class RecommendationEngine:
 
         # 취향 키워드 하드 필터 — 매칭 장소가 있으면 반드시 그 장소들로만 후보 제한
         # (데이터에 없는 음식/특징을 가진 장소를 추천하는 할루시네이션 방지)
+        # 키워드가 여러 개면 모두 맞는 곳을 먼저 쓰고("흑돼지 구이" → 둘 다 언급된 곳),
+        # 없으면 하나라도 맞는 곳을 쓴다. 챗봇 교체(_rank_by_keywords)와 같은 기준.
+        pref_hits = None
         if pref_kw:
-            pref_mask = pd.Series(False, index=pool.index)
-            for w in pref_kw:
-                pref_mask |= pool["reviews_text"].str.contains(w, na=False, case=False)
-                pref_mask |= pool["name"].str.contains(w, na=False, case=False)
-            pref_pool = pool[pref_mask]
-            if not pref_pool.empty:
-                pool = pref_pool.copy()  # 매칭 장소만 사용 (.copy()로 SettingWithCopyWarning 방지)
+            pool, pref_hits = filter_by_keywords(pool, pref_kw)
             # 매칭 없으면 전체 pool 유지 (fallback) — reason에서 ⚠️ 경고 표시됨
 
         pool["_score"] = 0.0
@@ -182,14 +180,19 @@ class RecommendationEngine:
         pool["_score"] += pool["total_cnt"].fillna(0).clip(0, 200) / 10
         # 3. 슬롯 키워드 매칭 (reviews_text 기반 — keywords 컬럼 없는 CSV 대응)
         for w in kw:
-            pool["_score"] += pool["reviews_text"].str.contains(w, na=False, case=False).astype(int) * 5
+            pool["_score"] += review_contains(pool["reviews_text"], w).astype(int) * 5
         # 4. 사용자 취향 키워드 매칭 (하드 필터 통과 후 세부 점수 조정)
+        #    리뷰는 "한 번이라도 나왔는지" 대신 "몇 %의 리뷰에 나왔는지"로 점수를 준다.
+        #    하드 필터를 통과한 후보는 모두 키워드가 있어서, 있다/없다로만 주면 후보 안의
+        #    순위가 평점·리뷰 수로만 갈린다 (analysis/keyword_score_simulation.py)
         if pref_kw:
             for w in pref_kw:
-                rv_hit  = pool["reviews_text"].str.contains(w, na=False, case=False).astype(int)
-                nm_hit  = pool["name"].str.contains(w, na=False, case=False).astype(int)
+                nm_hit = pool["name"].str.contains(w, na=False, case=False).astype(int)
                 pool["_score"] += nm_hit * 50
-                pool["_score"] += rv_hit * 20
+                pool["_score"] += review_hit_ratio(pool["reviews_text"], w) * 20
+            pool["_score"] += pref_hits * 15  # 일부만 맞는 fallback일 때 더 많이 맞는 곳 우선
+            if len(pref_kw) > 1:              # "흑돼지 구이"가 같은 리뷰에 함께 나온 비율
+                pool["_score"] += together_ratio(pool, pref_kw) * 30
         # 4-1. Chroma 리뷰 유사도 부스트 (취향 입력 시)
         if chroma_boost:
             pool["_score"] += pool["name"].map(chroma_boost).fillna(0)
@@ -261,7 +264,7 @@ class RecommendationEngine:
         if pref_kw:
             matched = False
             for w in pref_kw[:3]:
-                rv_hit = w in str(place.get("reviews_text", ""))
+                rv_hit = text_contains(place.get("reviews_text", ""), w)
                 nm_hit = w in str(place.get("name", ""))
                 if rv_hit or nm_hit:
                     parts.append(f"🎯 '{w}' 관련 장소")
@@ -273,7 +276,7 @@ class RecommendationEngine:
         else:
             # 취향 입력이 없을 때: 슬롯 기본 키워드 매칭 → Chroma 유사도 순으로 다음 관련 신호 표시
             rv_text = str(place.get("reviews_text", ""))
-            slot_kw_hit = next((w for w in slot.get("kw", []) if w in rv_text), None)
+            slot_kw_hit = next((w for w in slot.get("kw", []) if text_contains(rv_text, w)), None)
             if slot_kw_hit:
                 parts.append(f"🏷️ '{slot_kw_hit}' 키워드 매칭")
             elif place.get("name") in chroma_boost:
@@ -353,16 +356,18 @@ class RecommendationEngine:
                     max_completion_tokens=60,
                 )
                 content = res.choices[0].message.content.strip()
-                keywords = [k.strip() for k in content.split(",") if k.strip() and len(k.strip()) >= 2]
+                # 한 글자도 남긴다 ('뷰', '회' 등). 두 글자 이상만 남기면 "뷰 좋은 카페"가
+                # ['카페']만 남아 취향이 무시됐다. 휴리스틱 경로도 한 글자를 허용한다.
+                keywords = [k.strip() for k in content.split(",") if k.strip()]
                 # 부정 문맥 재확인 (AI가 놓친 경우 대비)
-                keywords = self._remove_negated_keywords(preferences, keywords)
+                keywords = drop_generic(self._remove_negated_keywords(preferences, keywords))
                 if keywords:
                     print(f"[AI 키워드 추출] '{preferences}' → {keywords}")
                     return keywords
             except Exception as e:
                 print(f"[키워드 추출 오류] {e}")
         result = self._heuristic_keywords(preferences)
-        return self._remove_negated_keywords(preferences, result)
+        return drop_generic(self._remove_negated_keywords(preferences, result))
 
     def _remove_negated_keywords(self, original: str, keywords: List[str]) -> List[str]:
         """키워드가 원문에서 부정·무관심 표현과 짝지어진 경우 제거.

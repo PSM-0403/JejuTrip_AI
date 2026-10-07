@@ -22,6 +22,8 @@ except ImportError:
 
 from config import TIME_SLOTS, OPENAI_MODEL
 from kakao_service import haversine
+import pandas as pd
+from text_match import filter_by_keywords, review_hit_ratio, split_keywords, text_contains, together_ratio
 
 _SLOT_LABELS = {s["key"]: s["label"] for s in TIME_SLOTS}
 _NUM_EMOJI   = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
@@ -75,6 +77,9 @@ def _detect_intent(user_text: str, itinerary: list, client) -> dict:
         f'2. 후보 리스트 요청 (추천해줘/보여줘/골라볼게/리스트): {{"type":"recommend_list","day":<int>,"slot_key":"<key>","keyword":"<str or "">"}}\n'
         f'3. 후보 선택 (N번/첫번째/두번째 등): {{"type":"select","index":<int>}}\n'
         f'4. 일반 질문: {{"type":"chat"}}\n'
+        f"keyword에는 장소 검색에 쓸 핵심 명사만 공백으로 구분해 넣으세요. "
+        f"조사와 '집', '맛집', '곳' 같은 말은 빼세요. "
+        f"예) '해산물이 들어간 국수집' → \"해산물 국수\", '점심 흑돼지로 바꿔줘' → \"흑돼지\"\n"
         f"JSON만 반환하세요."
     )
     try:
@@ -115,31 +120,36 @@ def _get_candidates(day: int, slot_key: str, keyword: str, dm, ulat: float, ulng
     if not in_radius.empty:
         pool = in_radius.copy()
 
-    # 챗 키워드 + 원래 일차별 조건(pref_kw_map) 병합
+    # 챗에서 새 키워드를 말했으면 그 키워드로만 찾는다 ("해산물로 바꿔줘"는 원래 취향 '국수'를
+    # 대신하겠다는 뜻). 새 키워드가 없을 때만 코스 생성 때 입력한 취향(pref_kw_map)을 쓴다.
     pref_kws = []
     if 1 <= day <= len(itin):
         pref_kws = itin[day - 1].get("pref_kw_map", {}).get(slot_key, [])
-    all_kws = ([keyword] if keyword else []) + pref_kws
+    search_kws = split_keywords(keyword) or pref_kws
 
-    if all_kws:
-        kw_mask = pool["reviews_text"].str.contains(all_kws[0], na=False, case=False) | \
-                  pool["name"].str.contains(all_kws[0], na=False, case=False)
-        for kw in all_kws[1:]:
-            kw_mask |= pool["reviews_text"].str.contains(kw, na=False, case=False)
-            kw_mask |= pool["name"].str.contains(kw, na=False, case=False)
-        matched = pool[kw_mask]
-        if not matched.empty:
-            pool = matched.copy()
+    pool = _rank_by_keywords(pool, search_kws)
+    return pool.nlargest(n, "_score").to_dict("records")
+
+
+def _rank_by_keywords(pool, kws: list):
+    """키워드를 모두 만족하는 곳을 먼저 찾고, 없으면 하나라도 맞는 곳, 그것도 없으면 전체에서 고른다.
+    점수: 평점·리뷰 수 + 키워드 언급 비율 + 장소명 매칭 + 맞은 키워드 수 - 숙소 거리"""
+    pool = pool.copy()
+    hits = None
+    if kws:
+        pool, hits = filter_by_keywords(pool, kws)
 
     pool["_score"] = pool["rating"].fillna(3.5) * 10
     pool["_score"] += pool["total_cnt"].fillna(0).clip(0, 200) / 10
-    # pref_kw_map 키워드 매칭 시 추가 점수
-    for kw in pref_kws:
-        pool["_score"] += pool["reviews_text"].str.contains(kw, na=False, case=False).astype(int) * 10
+    for kw in kws:
+        pool["_score"] += review_hit_ratio(pool["reviews_text"], kw) * 10
         pool["_score"] += pool["name"].str.contains(kw, na=False, case=False).astype(int) * 20
+    if hits is not None:
+        pool["_score"] += hits * 15
+    if len(kws) > 1:
+        pool["_score"] += together_ratio(pool, kws) * 30
     pool["_score"] -= pool["_dist"].clip(0, 60) * 0.5
-
-    return pool.nlargest(n, "_score").to_dict("records")
+    return pool
 
 
 def _format_candidates(day: int, slot_key: str, keyword: str, candidates: list) -> str:
@@ -249,17 +259,25 @@ def _apply_modification(day: int, slot_key: str, keyword: str, dm, ulat: float, 
     if not candidates:
         return "⚠️ 해당 조건에 맞는 장소를 찾지 못했습니다."
 
-    new_place  = random.choice(candidates[:3])
-    kw_matched = keyword and (
-        keyword.lower() in str(new_place.get("reviews_text", "")).lower()
-        or keyword.lower() in str(new_place.get("name", "")).lower()
-    )
+    new_place = random.choice(candidates[:3])
+    kws       = split_keywords(keyword)
+    matched   = [
+        kw for kw in kws
+        if text_contains(new_place.get("reviews_text", ""), kw)
+        or kw.lower() in str(new_place.get("name", "")).lower()
+    ]
+    missing   = [kw for kw in kws if kw not in matched]
 
     msg = _apply_place(day, slot_key, new_place, client, keyword)
-    if keyword and not kw_matched:
+    if kws and not matched:
         msg = (
-            f"⚠️ '{keyword}' 키워드와 정확히 일치하는 장소가 없어 "
+            f"⚠️ '{keyword}' 키워드와 일치하는 장소가 없어 "
             f"카테고리 내 최고 평점 장소로 대체했습니다.\n\n" + msg
+        )
+    elif missing:
+        msg = (
+            f"⚠️ '{', '.join(kws)}'가 모두 언급된 곳이 없어, "
+            f"'{', '.join(matched)}'만 맞는 곳으로 골랐습니다.\n\n" + msg
         )
     return msg
 
